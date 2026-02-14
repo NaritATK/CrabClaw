@@ -97,6 +97,7 @@ pub fn run_wizard() -> Result<Config> {
         channels_config,
         memory: MemoryConfig::default(), // SQLite + auto-save by default
         tunnel: tunnel_config,
+        gateway: crate::config::GatewayConfig::default(),
     };
 
     println!(

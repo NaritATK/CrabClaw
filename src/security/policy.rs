@@ -104,11 +104,26 @@ impl Default for SecurityPolicy {
                 "tail".into(),
             ],
             forbidden_paths: vec![
+                // System directories (blocked even when workspace_only=false)
                 "/etc".into(),
                 "/root".into(),
+                "/home".into(),
+                "/usr".into(),
+                "/bin".into(),
+                "/sbin".into(),
+                "/lib".into(),
+                "/opt".into(),
+                "/boot".into(),
+                "/dev".into(),
+                "/proc".into(),
+                "/sys".into(),
+                "/var".into(),
+                "/tmp".into(),
+                // Sensitive dotfiles
                 "~/.ssh".into(),
                 "~/.gnupg".into(),
-                "/var/run".into(),
+                "~/.aws".into(),
+                "~/.config".into(),
             ],
             max_actions_per_hour: 20,
             max_cost_per_day_cents: 500,
@@ -140,6 +155,11 @@ impl SecurityPolicy {
 
     /// Check if a file path is allowed (no path traversal, within workspace)
     pub fn is_path_allowed(&self, path: &str) -> bool {
+        // Block null bytes (can truncate paths in C-backed syscalls)
+        if path.contains('\0') {
+            return false;
+        }
+
         // Block obvious traversal attempts
         if path.contains("..") {
             return false;
@@ -158,6 +178,13 @@ impl SecurityPolicy {
         }
 
         true
+    }
+
+    /// Validate that a resolved path is still inside the workspace.
+    /// Call this AFTER joining `workspace_dir` + relative path and canonicalizing.
+    pub fn is_resolved_path_allowed(&self, resolved: &Path) -> bool {
+        // Must be under workspace_dir (prevents symlink escapes)
+        resolved.starts_with(&self.workspace_dir)
     }
 
     /// Check if autonomy level permits any action at all
@@ -552,9 +579,9 @@ mod tests {
     }
 
     #[test]
-    fn path_with_null_byte() {
+    fn path_with_null_byte_blocked() {
         let p = default_policy();
-        assert!(p.is_path_allowed("file\0.txt"));
+        assert!(!p.is_path_allowed("file\0.txt"));
     }
 
     #[test]
@@ -667,5 +694,121 @@ mod tests {
         let policy = SecurityPolicy::from_config(&autonomy_config, &workspace);
         assert_eq!(policy.tracker.count(), 0);
         assert!(!policy.is_rate_limited());
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // SECURITY CHECKLIST TESTS
+    // Checklist: gateway not public, pairing required,
+    //            filesystem scoped (no /), access via tunnel
+    // ══════════════════════════════════════════════════════════
+
+    // ── Checklist #3: Filesystem scoped (no /) ──────────────
+
+    #[test]
+    fn checklist_root_path_blocked() {
+        let p = default_policy();
+        assert!(!p.is_path_allowed("/"));
+        assert!(!p.is_path_allowed("/anything"));
+    }
+
+    #[test]
+    fn checklist_all_system_dirs_blocked() {
+        let p = SecurityPolicy {
+            workspace_only: false,
+            ..SecurityPolicy::default()
+        };
+        for dir in [
+            "/etc", "/root", "/home", "/usr", "/bin", "/sbin", "/lib", "/opt", "/boot", "/dev",
+            "/proc", "/sys", "/var", "/tmp",
+        ] {
+            assert!(
+                !p.is_path_allowed(dir),
+                "System dir should be blocked: {dir}"
+            );
+            assert!(
+                !p.is_path_allowed(&format!("{dir}/subpath")),
+                "Subpath of system dir should be blocked: {dir}/subpath"
+            );
+        }
+    }
+
+    #[test]
+    fn checklist_sensitive_dotfiles_blocked() {
+        let p = SecurityPolicy {
+            workspace_only: false,
+            ..SecurityPolicy::default()
+        };
+        for path in [
+            "~/.ssh/id_rsa",
+            "~/.gnupg/secring.gpg",
+            "~/.aws/credentials",
+            "~/.config/secrets",
+        ] {
+            assert!(
+                !p.is_path_allowed(path),
+                "Sensitive dotfile should be blocked: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn checklist_null_byte_injection_blocked() {
+        let p = default_policy();
+        assert!(!p.is_path_allowed("safe\0/../../../etc/passwd"));
+        assert!(!p.is_path_allowed("\0"));
+        assert!(!p.is_path_allowed("file\0"));
+    }
+
+    #[test]
+    fn checklist_workspace_only_blocks_all_absolute() {
+        let p = SecurityPolicy {
+            workspace_only: true,
+            ..SecurityPolicy::default()
+        };
+        assert!(!p.is_path_allowed("/any/absolute/path"));
+        assert!(p.is_path_allowed("relative/path.txt"));
+    }
+
+    #[test]
+    fn checklist_resolved_path_must_be_in_workspace() {
+        let p = SecurityPolicy {
+            workspace_dir: PathBuf::from("/home/user/project"),
+            ..SecurityPolicy::default()
+        };
+        // Inside workspace — allowed
+        assert!(p.is_resolved_path_allowed(Path::new("/home/user/project/src/main.rs")));
+        // Outside workspace — blocked (symlink escape)
+        assert!(!p.is_resolved_path_allowed(Path::new("/etc/passwd")));
+        assert!(!p.is_resolved_path_allowed(Path::new("/home/user/other_project/file")));
+        // Root — blocked
+        assert!(!p.is_resolved_path_allowed(Path::new("/")));
+    }
+
+    #[test]
+    fn checklist_default_policy_is_workspace_only() {
+        let p = SecurityPolicy::default();
+        assert!(
+            p.workspace_only,
+            "Default policy must be workspace_only=true"
+        );
+    }
+
+    #[test]
+    fn checklist_default_forbidden_paths_comprehensive() {
+        let p = SecurityPolicy::default();
+        // Must contain all critical system dirs
+        for dir in ["/etc", "/root", "/proc", "/sys", "/dev", "/var", "/tmp"] {
+            assert!(
+                p.forbidden_paths.iter().any(|f| f == dir),
+                "Default forbidden_paths must include {dir}"
+            );
+        }
+        // Must contain sensitive dotfiles
+        for dot in ["~/.ssh", "~/.gnupg", "~/.aws"] {
+            assert!(
+                p.forbidden_paths.iter().any(|f| f == dot),
+                "Default forbidden_paths must include {dot}"
+            );
+        }
     }
 }

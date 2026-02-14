@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::memory::{self, Memory, MemoryCategory};
 use crate::providers::{self, Provider};
+use crate::security::pairing::{is_public_bind, PairingGuard};
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -10,6 +11,16 @@ use tokio::net::TcpListener;
 /// Zero new dependencies — uses raw TCP + tokio.
 #[allow(clippy::too_many_lines)]
 pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
+    // ── Security: refuse public bind without tunnel or explicit opt-in ──
+    if is_public_bind(host) && config.tunnel.provider == "none" && !config.gateway.allow_public_bind
+    {
+        anyhow::bail!(
+            "🛑 Refusing to bind to {host} — gateway would be exposed to the internet.\n\
+             Fix: use --host 127.0.0.1 (default), configure a tunnel, or set\n\
+             [gateway] allow_public_bind = true in config.toml (NOT recommended)."
+        );
+    }
+
     let addr = format!("{host}:{port}");
     let listener = TcpListener::bind(&addr).await?;
 
@@ -36,6 +47,12 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         .and_then(|w| w.secret.as_deref())
         .map(Arc::from);
 
+    // ── Pairing guard ──────────────────────────────────────
+    let pairing = Arc::new(PairingGuard::new(
+        config.gateway.require_pairing,
+        &config.gateway.paired_tokens,
+    ));
+
     // ── Tunnel ────────────────────────────────────────────────
     let tunnel = crate::tunnel::create_tunnel(&config.tunnel)?;
     let mut tunnel_url: Option<String> = None;
@@ -58,14 +75,23 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
     if let Some(ref url) = tunnel_url {
         println!("  🌐 Public URL: {url}");
     }
+    println!("  POST /pair     — pair a new client (X-Pairing-Code header)");
     println!("  POST /webhook  — {{\"message\": \"your prompt\"}}");
     println!("  GET  /health   — health check");
-    if webhook_secret.is_some() {
-        println!("  🔒 Webhook authentication: ENABLED (X-Webhook-Secret header required)");
+    if let Some(code) = pairing.pairing_code() {
+        println!();
+        println!("  � PAIRING REQUIRED — use this one-time code:");
+        println!("     ┌──────────────┐");
+        println!("     │  {code}  │");
+        println!("     └──────────────┘");
+        println!("     Send: POST /pair with header X-Pairing-Code: {code}");
+    } else if pairing.require_pairing() {
+        println!("  🔒 Pairing: ACTIVE (bearer token required)");
     } else {
-        println!(
-            "  ⚠️  Webhook authentication: DISABLED (set [channels.webhook] secret to enable)"
-        );
+        println!("  ⚠️  Pairing: DISABLED (all requests accepted)");
+    }
+    if webhook_secret.is_some() {
+        println!("  🔒 Webhook secret: ENABLED");
     }
     println!("  Press Ctrl+C to stop.\n");
 
@@ -76,6 +102,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
         let mem = mem.clone();
         let auto_save = config.memory.auto_save;
         let secret = webhook_secret.clone();
+        let pairing = pairing.clone();
 
         tokio::spawn(async move {
             let mut buf = vec![0u8; 8192];
@@ -101,6 +128,7 @@ pub async fn run_gateway(host: &str, port: u16, config: Config) -> Result<()> {
                     &mem,
                     auto_save,
                     secret.as_ref(),
+                    &pairing,
                 )
                 .await;
             } else {
@@ -135,20 +163,52 @@ async fn handle_request(
     mem: &Arc<dyn Memory>,
     auto_save: bool,
     webhook_secret: Option<&Arc<str>>,
+    pairing: &PairingGuard,
 ) {
     match (method, path) {
+        // Health check — always public (no secrets leaked)
         ("GET", "/health") => {
             let body = serde_json::json!({
                 "status": "ok",
-                "version": env!("CARGO_PKG_VERSION"),
-                "memory": mem.name(),
-                "memory_healthy": mem.health_check().await,
+                "paired": pairing.is_paired(),
             });
             let _ = send_json(stream, 200, &body).await;
         }
 
+        // Pairing endpoint — exchange one-time code for bearer token
+        ("POST", "/pair") => {
+            let code = extract_header(request, "X-Pairing-Code").unwrap_or("");
+            if let Some(token) = pairing.try_pair(code) {
+                tracing::info!("🔐 New client paired successfully");
+                let body = serde_json::json!({
+                    "paired": true,
+                    "token": token,
+                    "message": "Save this token — use it as Authorization: Bearer <token>"
+                });
+                let _ = send_json(stream, 200, &body).await;
+            } else {
+                tracing::warn!("🔐 Pairing attempt with invalid code");
+                let err = serde_json::json!({"error": "Invalid pairing code"});
+                let _ = send_json(stream, 403, &err).await;
+            }
+        }
+
         ("POST", "/webhook") => {
-            // Authenticate webhook requests if a secret is configured
+            // ── Bearer token auth (pairing) ──
+            if pairing.require_pairing() {
+                let auth = extract_header(request, "Authorization").unwrap_or("");
+                let token = auth.strip_prefix("Bearer ").unwrap_or("");
+                if !pairing.is_authenticated(token) {
+                    tracing::warn!("Webhook: rejected — not paired / invalid bearer token");
+                    let err = serde_json::json!({
+                        "error": "Unauthorized — pair first via POST /pair, then send Authorization: Bearer <token>"
+                    });
+                    let _ = send_json(stream, 401, &err).await;
+                    return;
+                }
+            }
+
+            // ── Webhook secret auth (optional, additional layer) ──
             if let Some(secret) = webhook_secret {
                 let header_val = extract_header(request, "X-Webhook-Secret");
                 match header_val {
@@ -178,7 +238,7 @@ async fn handle_request(
         _ => {
             let body = serde_json::json!({
                 "error": "Not found",
-                "routes": ["GET /health", "POST /webhook"]
+                "routes": ["GET /health", "POST /pair", "POST /webhook"]
             });
             let _ = send_json(stream, 404, &body).await;
         }

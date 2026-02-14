@@ -36,6 +36,38 @@ pub struct Config {
 
     #[serde(default)]
     pub tunnel: TunnelConfig,
+
+    #[serde(default)]
+    pub gateway: GatewayConfig,
+}
+
+// ── Gateway security ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayConfig {
+    /// Require pairing before accepting requests (default: true)
+    #[serde(default = "default_true")]
+    pub require_pairing: bool,
+    /// Allow binding to non-localhost without a tunnel (default: false)
+    #[serde(default)]
+    pub allow_public_bind: bool,
+    /// Paired bearer tokens (managed automatically, not user-edited)
+    #[serde(default)]
+    pub paired_tokens: Vec<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for GatewayConfig {
+    fn default() -> Self {
+        Self {
+            require_pairing: true,
+            allow_public_bind: false,
+            paired_tokens: Vec::new(),
+        }
+    }
 }
 
 // ── Memory ───────────────────────────────────────────────────
@@ -157,8 +189,22 @@ impl Default for AutonomyConfig {
             forbidden_paths: vec![
                 "/etc".into(),
                 "/root".into(),
+                "/home".into(),
+                "/usr".into(),
+                "/bin".into(),
+                "/sbin".into(),
+                "/lib".into(),
+                "/opt".into(),
+                "/boot".into(),
+                "/dev".into(),
+                "/proc".into(),
+                "/sys".into(),
+                "/var".into(),
+                "/tmp".into(),
                 "~/.ssh".into(),
                 "~/.gnupg".into(),
+                "~/.aws".into(),
+                "~/.config".into(),
             ],
             max_actions_per_hour: 20,
             max_cost_per_day_cents: 500,
@@ -356,6 +402,7 @@ impl Default for Config {
             channels_config: ChannelsConfig::default(),
             memory: MemoryConfig::default(),
             tunnel: TunnelConfig::default(),
+            gateway: GatewayConfig::default(),
         }
     }
 }
@@ -494,6 +541,7 @@ mod tests {
             },
             memory: MemoryConfig::default(),
             tunnel: TunnelConfig::default(),
+            gateway: GatewayConfig::default(),
         };
 
         let toml_str = toml::to_string_pretty(&config).unwrap();
@@ -554,6 +602,7 @@ default_temperature = 0.7
             channels_config: ChannelsConfig::default(),
             memory: MemoryConfig::default(),
             tunnel: TunnelConfig::default(),
+            gateway: GatewayConfig::default(),
         };
 
         config.save().unwrap();
@@ -769,5 +818,99 @@ channel_id = "C123"
         let parsed: WebhookConfig = serde_json::from_str(json).unwrap();
         assert!(parsed.secret.is_none());
         assert_eq!(parsed.port, 8080);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // SECURITY CHECKLIST TESTS — Gateway config
+    // ══════════════════════════════════════════════════════════
+
+    #[test]
+    fn checklist_gateway_default_requires_pairing() {
+        let g = GatewayConfig::default();
+        assert!(g.require_pairing, "Pairing must be required by default");
+    }
+
+    #[test]
+    fn checklist_gateway_default_blocks_public_bind() {
+        let g = GatewayConfig::default();
+        assert!(
+            !g.allow_public_bind,
+            "Public bind must be blocked by default"
+        );
+    }
+
+    #[test]
+    fn checklist_gateway_default_no_tokens() {
+        let g = GatewayConfig::default();
+        assert!(
+            g.paired_tokens.is_empty(),
+            "No pre-paired tokens by default"
+        );
+    }
+
+    #[test]
+    fn checklist_gateway_cli_default_host_is_localhost() {
+        // The CLI default for --host is 127.0.0.1 (checked in main.rs)
+        // Here we verify the config default matches
+        let c = Config::default();
+        assert!(
+            c.gateway.require_pairing,
+            "Config default must require pairing"
+        );
+        assert!(
+            !c.gateway.allow_public_bind,
+            "Config default must block public bind"
+        );
+    }
+
+    #[test]
+    fn checklist_gateway_serde_roundtrip() {
+        let g = GatewayConfig {
+            require_pairing: true,
+            allow_public_bind: false,
+            paired_tokens: vec!["zc_test_token".into()],
+        };
+        let toml_str = toml::to_string(&g).unwrap();
+        let parsed: GatewayConfig = toml::from_str(&toml_str).unwrap();
+        assert!(parsed.require_pairing);
+        assert!(!parsed.allow_public_bind);
+        assert_eq!(parsed.paired_tokens, vec!["zc_test_token"]);
+    }
+
+    #[test]
+    fn checklist_gateway_backward_compat_no_gateway_section() {
+        // Old configs without [gateway] should get secure defaults
+        let minimal = r#"
+workspace_dir = "/tmp/ws"
+config_path = "/tmp/config.toml"
+default_temperature = 0.7
+"#;
+        let parsed: Config = toml::from_str(minimal).unwrap();
+        assert!(
+            parsed.gateway.require_pairing,
+            "Missing [gateway] must default to require_pairing=true"
+        );
+        assert!(
+            !parsed.gateway.allow_public_bind,
+            "Missing [gateway] must default to allow_public_bind=false"
+        );
+    }
+
+    #[test]
+    fn checklist_autonomy_default_is_workspace_scoped() {
+        let a = AutonomyConfig::default();
+        assert!(a.workspace_only, "Default autonomy must be workspace_only");
+        assert!(
+            a.forbidden_paths.contains(&"/etc".to_string()),
+            "Must block /etc"
+        );
+        assert!(
+            a.forbidden_paths.contains(&"/proc".to_string()),
+            "Must block /proc"
+        );
+        assert!(
+            a.forbidden_paths.contains(&"~/.ssh".to_string()),
+            "Must block ~/.ssh"
+        );
     }
 }
