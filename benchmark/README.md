@@ -13,6 +13,9 @@ For each latency family, CrabClaw records **median, p90, p95** and keeps raw sam
 - tool latency: `tool.exec.*`
 - memory recall latency/quality: `memory.recall.*`, `memory.recall.hit_at_k`, `memory.recall.precision_proxy`
 - `cost.per_task_usd` (synthetic reference task)
+- cost breakdown inputs for deterministic auditing:
+  - `cost.input_tokens`, `cost.output_tokens`
+  - `cost.input_rate_per_m`, `cost.output_rate_per_m`
 - observability diagnostics:
   - `http.dns_ms`, `http.connect_ms`, `http.ttfb_ms` (real mode when provider URL is configured)
   - real/synthetic execution flags: `bench.real_provider_used`, `bench.real_channel_used`, `bench.real_tool_used`

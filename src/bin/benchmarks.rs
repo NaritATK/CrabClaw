@@ -442,15 +442,34 @@ async fn collect_reliability_observability_metrics() -> anyhow::Result<ReliableP
     Ok(provider.stats_snapshot())
 }
 
-fn benchmark_cost_per_task_usd() -> f64 {
-    // Override-capable synthetic cost model.
+fn benchmark_cost_inputs() -> (f64, f64, f64, f64) {
     let input_tokens = env_f64("CRABCLAW_BENCH_INPUT_TOKENS", 1200.0);
     let output_tokens = env_f64("CRABCLAW_BENCH_OUTPUT_TOKENS", 500.0);
     let input_rate_per_million = env_f64("CRABCLAW_BENCH_INPUT_RATE_PER_M", 5.0);
     let output_rate_per_million = env_f64("CRABCLAW_BENCH_OUTPUT_RATE_PER_M", 15.0);
+    (
+        input_tokens,
+        output_tokens,
+        input_rate_per_million,
+        output_rate_per_million,
+    )
+}
 
-    (input_tokens / 1_000_000.0) * input_rate_per_million
-        + (output_tokens / 1_000_000.0) * output_rate_per_million
+fn benchmark_cost_per_task_usd() -> (f64, f64, f64, f64, f64) {
+    // Override-capable synthetic cost model.
+    let (input_tokens, output_tokens, input_rate_per_million, output_rate_per_million) =
+        benchmark_cost_inputs();
+
+    let cost = (input_tokens / 1_000_000.0) * input_rate_per_million
+        + (output_tokens / 1_000_000.0) * output_rate_per_million;
+
+    (
+        cost,
+        input_tokens,
+        output_tokens,
+        input_rate_per_million,
+        output_rate_per_million,
+    )
 }
 
 fn parse_output_path() -> PathBuf {
@@ -612,10 +631,18 @@ async fn main() -> anyhow::Result<()> {
         "ttft.median_ms".to_string(),
         percentile_ms(&provider_fast, 0.50),
     );
-    metrics.insert(
-        "cost.per_task_usd".to_string(),
-        benchmark_cost_per_task_usd(),
-    );
+    let (
+        cost_per_task_usd,
+        cost_input_tokens,
+        cost_output_tokens,
+        cost_input_rate_per_m,
+        cost_output_rate_per_m,
+    ) = benchmark_cost_per_task_usd();
+    metrics.insert("cost.per_task_usd".to_string(), cost_per_task_usd);
+    metrics.insert("cost.input_tokens".to_string(), cost_input_tokens);
+    metrics.insert("cost.output_tokens".to_string(), cost_output_tokens);
+    metrics.insert("cost.input_rate_per_m".to_string(), cost_input_rate_per_m);
+    metrics.insert("cost.output_rate_per_m".to_string(), cost_output_rate_per_m);
     metrics.insert(
         "bench.mode.real".to_string(),
         if matches!(mode, BenchMode::Real) {
