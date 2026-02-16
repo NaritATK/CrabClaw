@@ -28,20 +28,25 @@ jobs:
             label: linux
             baseline: benchmark/baseline.linux.json
             python_bin: python3
+            abs_floor_ms: 5.0
           - os: macos-latest
             label: macos
             baseline: benchmark/baseline.macos.json
             python_bin: python3
+            abs_floor_ms: 7.0
           - os: windows-latest
             label: windows
             baseline: benchmark/baseline.windows.json
             python_bin: python
+            abs_floor_ms: 8.0
 
     env:
       CARGO_TERM_COLOR: always
       CRABCLAW_BENCH_MODE: ${{ github.event.inputs.mode }}
       CRABCLAW_BENCH_BASELINE: ${{ github.event.inputs.mode == 'real' && 'benchmark/baseline.real.json' || matrix.baseline }}
       PYTHON_BIN: ${{ matrix.python_bin }}
+      CRABCLAW_BENCH_STRICT: '1'
+      CRABCLAW_BENCH_ABS_FLOOR_MS: ${{ matrix.abs_floor_ms }}
       CRABCLAW_BENCH_REAL_PROVIDER_URL: ${{ secrets.CRABCLAW_BENCH_REAL_PROVIDER_URL }}
       CRABCLAW_BENCH_REAL_PROVIDER_API_KEY: ${{ secrets.CRABCLAW_BENCH_REAL_PROVIDER_API_KEY }}
       CRABCLAW_BENCH_REAL_PROVIDER_MODEL: ${{ secrets.CRABCLAW_BENCH_REAL_PROVIDER_MODEL }}
@@ -155,21 +160,36 @@ jobs:
               try:
                 data = json.loads(latest_file.read_text())
                 m = data.get('metrics', {})
-                detail.append((label, m.get('cold_start.p95_ms'), m.get('ttft.p95_ms'), m.get('cost.per_task_usd')))
+                detail.append((
+                  label,
+                  m.get('cold_start.median_ms'),
+                  m.get('cold_start.p90_ms'),
+                  m.get('ttft.median_ms'),
+                  m.get('ttft.p90_ms'),
+                  m.get('cost.per_task_usd')
+                ))
               except Exception:
-                detail.append((label, None, None, None))
+                detail.append((label, None, None, None, None, None))
             else:
-              detail.append((label, None, None, None))
+              detail.append((label, None, None, None, None, None))
 
           lines = ['## Benchmark Matrix Summary', '', '| Label | OS Runner | Result | Status |', '|---|---|---|---|']
           for label, os_name, result, icon in rows:
             lines.append(f'| `{label}` | `{os_name}` | `{result}` | {icon} |')
 
-          lines.extend(['', '### Key Metrics (from latest.full.json)', '', '| Label | cold_start.p95_ms | ttft.p95_ms | cost.per_task_usd |', '|---|---:|---:|---:|'])
-          for label, cold, ttft, cost in detail:
+          lines.extend([
+            '',
+            '### Key Metrics (gate-aligned from latest.full.json)',
+            '',
+            '| Label | cold_start.median_ms | cold_start.p90_ms | ttft.median_ms | ttft.p90_ms | cost.per_task_usd |',
+            '|---|---:|---:|---:|---:|---:|'
+          ])
+          for label, cold_median, cold_p90, ttft_median, ttft_p90, cost in detail:
             def fmt(v):
               return '-' if v is None else f"{v:.4f}"
-            lines.append(f'| `{label}` | {fmt(cold)} | {fmt(ttft)} | {fmt(cost)} |')
+            lines.append(
+              f'| `{label}` | {fmt(cold_median)} | {fmt(cold_p90)} | {fmt(ttft_median)} | {fmt(ttft_p90)} | {fmt(cost)} |'
+            )
 
           Path('matrix-summary.md').write_text('\n'.join(lines) + '\n')
           print('\n'.join(lines))
