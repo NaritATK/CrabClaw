@@ -46,6 +46,36 @@ struct CacheEntry {
     inserted_at: Instant,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ReliableProviderStats {
+    pub total_calls: u64,
+    pub retry_count: u64,
+    pub timeout_count: u64,
+    pub cache_hits: u64,
+    pub cache_lookups: u64,
+    pub circuit_open_count: u64,
+    pub circuit_half_open_count: u64,
+    pub circuit_close_count: u64,
+}
+
+impl ReliableProviderStats {
+    pub fn timeout_rate(&self) -> f64 {
+        if self.total_calls == 0 {
+            0.0
+        } else {
+            self.timeout_count as f64 / self.total_calls as f64
+        }
+    }
+
+    pub fn cache_hit_rate(&self) -> f64 {
+        if self.cache_lookups == 0 {
+            0.0
+        } else {
+            self.cache_hits as f64 / self.cache_lookups as f64
+        }
+    }
+}
+
 /// Provider wrapper with retry + fallback + circuit-breaker + response-cache.
 pub struct ReliableProvider {
     providers: Vec<(String, Box<dyn Provider>)>,
@@ -64,6 +94,12 @@ pub struct ReliableProvider {
     cb_open_count: AtomicU64,
     cb_half_open_count: AtomicU64,
     cb_close_count: AtomicU64,
+
+    total_calls: AtomicU64,
+    retry_count: AtomicU64,
+    timeout_count: AtomicU64,
+    cache_hits: AtomicU64,
+    cache_lookups: AtomicU64,
 }
 
 impl ReliableProvider {
@@ -118,7 +154,33 @@ impl ReliableProvider {
             cb_open_count: AtomicU64::new(0),
             cb_half_open_count: AtomicU64::new(0),
             cb_close_count: AtomicU64::new(0),
+            total_calls: AtomicU64::new(0),
+            retry_count: AtomicU64::new(0),
+            timeout_count: AtomicU64::new(0),
+            cache_hits: AtomicU64::new(0),
+            cache_lookups: AtomicU64::new(0),
         }
+    }
+
+    pub fn stats_snapshot(&self) -> ReliableProviderStats {
+        ReliableProviderStats {
+            total_calls: self.total_calls.load(Ordering::Relaxed),
+            retry_count: self.retry_count.load(Ordering::Relaxed),
+            timeout_count: self.timeout_count.load(Ordering::Relaxed),
+            cache_hits: self.cache_hits.load(Ordering::Relaxed),
+            cache_lookups: self.cache_lookups.load(Ordering::Relaxed),
+            circuit_open_count: self.cb_open_count.load(Ordering::Relaxed),
+            circuit_half_open_count: self.cb_half_open_count.load(Ordering::Relaxed),
+            circuit_close_count: self.cb_close_count.load(Ordering::Relaxed),
+        }
+    }
+
+    fn is_timeout_error(err: &anyhow::Error) -> bool {
+        if let Some(reqwest_err) = err.downcast_ref::<reqwest::Error>() {
+            return reqwest_err.is_timeout();
+        }
+        let msg = err.to_string().to_ascii_lowercase();
+        msg.contains("timeout") || msg.contains("timed out")
     }
 
     fn cache_key_chat(
@@ -308,7 +370,9 @@ impl Provider for ReliableProvider {
         temperature: f64,
     ) -> anyhow::Result<String> {
         let cache_key = self.cache_key_chat(system_prompt, message, model, temperature);
+        self.cache_lookups.fetch_add(1, Ordering::Relaxed);
         if let Some(hit) = self.cache_get(&cache_key) {
+            self.cache_hits.fetch_add(1, Ordering::Relaxed);
             tracing::debug!("Provider response cache hit (chat_with_system)");
             return Ok(hit);
         }
@@ -328,6 +392,7 @@ impl Provider for ReliableProvider {
             let mut backoff_ms = self.base_backoff_ms;
 
             for attempt in 0..=self.max_retries {
+                self.total_calls.fetch_add(1, Ordering::Relaxed);
                 match provider
                     .chat_with_system(system_prompt, message, model, temperature)
                     .await
@@ -346,6 +411,9 @@ impl Provider for ReliableProvider {
                     }
                     Err(e) => {
                         let non_retryable = is_non_retryable(&e);
+                        if Self::is_timeout_error(&e) {
+                            self.timeout_count.fetch_add(1, Ordering::Relaxed);
+                        }
                         failures.push(format!(
                             "{provider_name} attempt {}/{}: {e}",
                             attempt + 1,
@@ -363,6 +431,7 @@ impl Provider for ReliableProvider {
                         }
 
                         if attempt < self.max_retries {
+                            self.retry_count.fetch_add(1, Ordering::Relaxed);
                             tracing::warn!(
                                 provider = provider_name,
                                 attempt = attempt + 1,
@@ -389,7 +458,9 @@ impl Provider for ReliableProvider {
         temperature: f64,
     ) -> anyhow::Result<String> {
         let cache_key = self.cache_key_history(messages, model, temperature);
+        self.cache_lookups.fetch_add(1, Ordering::Relaxed);
         if let Some(hit) = self.cache_get(&cache_key) {
+            self.cache_hits.fetch_add(1, Ordering::Relaxed);
             tracing::debug!("Provider response cache hit (chat_with_history)");
             return Ok(hit);
         }
@@ -409,6 +480,7 @@ impl Provider for ReliableProvider {
             let mut backoff_ms = self.base_backoff_ms;
 
             for attempt in 0..=self.max_retries {
+                self.total_calls.fetch_add(1, Ordering::Relaxed);
                 match provider
                     .chat_with_history(messages, model, temperature)
                     .await
@@ -427,6 +499,9 @@ impl Provider for ReliableProvider {
                     }
                     Err(e) => {
                         let non_retryable = is_non_retryable(&e);
+                        if Self::is_timeout_error(&e) {
+                            self.timeout_count.fetch_add(1, Ordering::Relaxed);
+                        }
                         failures.push(format!(
                             "{provider_name} attempt {}/{}: {e}",
                             attempt + 1,
@@ -444,6 +519,7 @@ impl Provider for ReliableProvider {
                         }
 
                         if attempt < self.max_retries {
+                            self.retry_count.fetch_add(1, Ordering::Relaxed);
                             tracing::warn!(
                                 provider = provider_name,
                                 attempt = attempt + 1,

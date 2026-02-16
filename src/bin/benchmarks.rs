@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use crabclaw::channels::traits::{Channel, ChannelMessage};
 use crabclaw::memory::sqlite::SqliteMemory;
 use crabclaw::memory::traits::{Memory, MemoryCategory};
+use crabclaw::providers::reliable::{ReliableProvider, ReliableProviderStats};
 use crabclaw::providers::traits::Provider;
 use crabclaw::tools::traits::{Tool, ToolResult};
 use serde::Serialize;
@@ -274,6 +275,33 @@ fn env_f64(key: &str, default: f64) -> f64 {
         .unwrap_or(default)
 }
 
+struct FlakyProvider {
+    attempts: std::sync::Mutex<usize>,
+    fail_for_attempts: usize,
+    timeout_error: bool,
+}
+
+#[async_trait]
+impl Provider for FlakyProvider {
+    async fn chat_with_system(
+        &self,
+        _system_prompt: Option<&str>,
+        _message: &str,
+        _model: &str,
+        _temperature: f64,
+    ) -> anyhow::Result<String> {
+        let mut attempts = self.attempts.lock().unwrap_or_else(|e| e.into_inner());
+        *attempts += 1;
+        if *attempts <= self.fail_for_attempts {
+            if self.timeout_error {
+                anyhow::bail!("request timeout")
+            }
+            anyhow::bail!("temporary failure")
+        }
+        Ok("ok".to_string())
+    }
+}
+
 async fn bench_provider(provider: &dyn Provider, iterations: usize) -> anyhow::Result<Vec<f64>> {
     let mut out = Vec::with_capacity(iterations);
     for _ in 0..iterations {
@@ -332,6 +360,64 @@ async fn bench_memory_recall(iterations: usize) -> anyhow::Result<Vec<f64>> {
 
     let _ = std::fs::remove_dir_all(&dir);
     Ok(out)
+}
+
+async fn probe_http_breakdown(base_url: &str) -> anyhow::Result<(f64, f64, f64)> {
+    use tokio::net::{lookup_host, TcpStream};
+
+    let url = reqwest::Url::parse(base_url).context("parse provider URL for http breakdown")?;
+    let host = url
+        .host_str()
+        .context("provider URL host missing for http breakdown")?;
+    let port = url.port_or_known_default().unwrap_or(443);
+
+    let dns_t0 = Instant::now();
+    let addrs: Vec<_> = lookup_host((host, port)).await?.collect();
+    let dns_ms = dns_t0.elapsed().as_secs_f64() * 1000.0;
+
+    let connect_t0 = Instant::now();
+    let _sock = TcpStream::connect(
+        addrs
+            .first()
+            .context("no resolved address for provider host")?,
+    )
+    .await?;
+    let connect_ms = connect_t0.elapsed().as_secs_f64() * 1000.0;
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(20))
+        .build()?;
+    let ttfb_t0 = Instant::now();
+    let _ = client.get(base_url).send().await;
+    let ttfb_ms = ttfb_t0.elapsed().as_secs_f64() * 1000.0;
+
+    Ok((dns_ms, connect_ms, ttfb_ms))
+}
+
+async fn collect_reliability_observability_metrics() -> anyhow::Result<ReliableProviderStats> {
+    let provider = ReliableProvider::new(
+        vec![(
+            "flaky".to_string(),
+            Box::new(FlakyProvider {
+                attempts: std::sync::Mutex::new(0),
+                fail_for_attempts: 2,
+                timeout_error: true,
+            }),
+        )],
+        3,
+        1,
+    );
+
+    // First call triggers retries/timeouts; second call should hit cache.
+    let _ = provider
+        .chat_with_system(Some("bench"), "hello", "benchmark-model", 0.0)
+        .await;
+    let _ = provider
+        .chat_with_system(Some("bench"), "hello", "benchmark-model", 0.0)
+        .await;
+
+    Ok(provider.stats_snapshot())
 }
 
 fn benchmark_cost_per_task_usd() -> f64 {
@@ -465,9 +551,15 @@ async fn main() -> anyhow::Result<()> {
     insert_latency_metrics(&mut metrics, "memory.recall", &memory_recall);
 
     metrics.insert("memory.recall.avg_ms".to_string(), average(&memory_recall));
-    metrics.insert("ttft.p90_ms".to_string(), percentile_ms(&provider_fast, 0.90));
+    metrics.insert(
+        "ttft.p90_ms".to_string(),
+        percentile_ms(&provider_fast, 0.90),
+    );
     metrics.insert("ttft.p95_ms".to_string(), ttft_p95);
-    metrics.insert("ttft.median_ms".to_string(), percentile_ms(&provider_fast, 0.50));
+    metrics.insert(
+        "ttft.median_ms".to_string(),
+        percentile_ms(&provider_fast, 0.50),
+    );
     metrics.insert(
         "cost.per_task_usd".to_string(),
         benchmark_cost_per_task_usd(),
@@ -480,6 +572,42 @@ async fn main() -> anyhow::Result<()> {
             0.0
         },
     );
+
+    let reliability_stats = collect_reliability_observability_metrics().await?;
+    metrics.insert(
+        "provider.retry_count".to_string(),
+        reliability_stats.retry_count as f64,
+    );
+    metrics.insert(
+        "provider.timeout_rate".to_string(),
+        reliability_stats.timeout_rate(),
+    );
+    metrics.insert(
+        "circuitbreaker.open_count".to_string(),
+        reliability_stats.circuit_open_count as f64,
+    );
+    metrics.insert(
+        "circuitbreaker.half_open_count".to_string(),
+        reliability_stats.circuit_half_open_count as f64,
+    );
+    metrics.insert(
+        "circuitbreaker.close_count".to_string(),
+        reliability_stats.circuit_close_count as f64,
+    );
+    metrics.insert(
+        "cache.response.hit_rate".to_string(),
+        reliability_stats.cache_hit_rate(),
+    );
+
+    if matches!(mode, BenchMode::Real) {
+        if let Ok(base_url) = std::env::var("CRABCLAW_BENCH_REAL_PROVIDER_URL") {
+            if let Ok((dns_ms, connect_ms, ttfb_ms)) = probe_http_breakdown(&base_url).await {
+                metrics.insert("http.dns_ms".to_string(), dns_ms);
+                metrics.insert("http.connect_ms".to_string(), connect_ms);
+                metrics.insert("http.ttfb_ms".to_string(), ttfb_ms);
+            }
+        }
+    }
 
     let mut raw_samples_ms = BTreeMap::new();
     raw_samples_ms.insert("provider.fast".to_string(), provider_fast.clone());

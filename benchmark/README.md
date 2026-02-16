@@ -13,6 +13,11 @@ For each latency family, CrabClaw records **median, p90, p95** and keeps raw sam
 - tool latency: `tool.exec.*`
 - memory recall latency: `memory.recall.*`
 - `cost.per_task_usd` (synthetic reference task)
+- observability diagnostics:
+  - `http.dns_ms`, `http.connect_ms`, `http.ttfb_ms` (real mode when provider URL is configured)
+  - `provider.retry_count`, `provider.timeout_rate`
+  - `circuitbreaker.open_count`, `circuitbreaker.half_open_count`, `circuitbreaker.close_count`
+  - `cache.response.hit_rate`
 
 ## Run locally
 
