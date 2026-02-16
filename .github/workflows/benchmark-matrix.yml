@@ -66,8 +66,21 @@ jobs:
           fi
 
       - name: Run benchmark gate
+        id: bench
         shell: bash
         run: bash scripts/benchmark_ci.sh
+
+      - name: Write matrix status file
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p benchmark/results
+          cat > benchmark/results/_status.env <<EOF
+          label=${{ matrix.label }}
+          os=${{ matrix.os }}
+          mode=${{ github.event.inputs.mode }}
+          result=${{ steps.bench.outcome }}
+          EOF
 
       - name: Append summary to job summary
         if: always()
@@ -85,3 +98,92 @@ jobs:
         with:
           name: benchmark-results-${{ matrix.label }}-${{ github.event.inputs.mode }}
           path: benchmark/results/
+
+  benchmark-matrix-summary:
+    name: Benchmark Matrix Summary
+    if: always()
+    needs: [benchmark-matrix]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download benchmark artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: benchmark-results-*-${{ github.event.inputs.mode }}
+          merge-multiple: false
+
+      - name: Build consolidated summary
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('artifacts')
+          rows = []
+          detail = []
+          failed = False
+
+          if not root.exists():
+            Path('matrix-summary.md').write_text('## ❌ Benchmark Matrix Summary\n\nNo artifacts found.\n')
+            raise SystemExit(1)
+
+          for d in sorted([p for p in root.iterdir() if p.is_dir()]):
+            status_file = d / '_status.env'
+            summary_file = d / 'summary.md'
+            latest_file = d / 'latest.full.json'
+
+            label = d.name
+            result = 'unknown'
+            os_name = 'unknown'
+            if status_file.exists():
+              env = {}
+              for line in status_file.read_text().splitlines():
+                if '=' in line:
+                  k, v = line.split('=', 1)
+                  env[k.strip()] = v.strip()
+              label = env.get('label', label)
+              result = env.get('result', 'unknown')
+              os_name = env.get('os', 'unknown')
+
+            status_icon = '✅' if result == 'success' else ('❌' if result in ('failure','cancelled','timed_out') else '⚠️')
+            rows.append((label, os_name, result, status_icon))
+            if result != 'success':
+              failed = True
+
+            if latest_file.exists():
+              try:
+                data = json.loads(latest_file.read_text())
+                m = data.get('metrics', {})
+                detail.append((label, m.get('cold_start.p95_ms'), m.get('ttft.p95_ms'), m.get('cost.per_task_usd')))
+              except Exception:
+                detail.append((label, None, None, None))
+            else:
+              detail.append((label, None, None, None))
+
+          lines = ['## Benchmark Matrix Summary', '', '| Label | OS Runner | Result | Status |', '|---|---|---|---|']
+          for label, os_name, result, icon in rows:
+            lines.append(f'| `{label}` | `{os_name}` | `{result}` | {icon} |')
+
+          lines.extend(['', '### Key Metrics (from latest.full.json)', '', '| Label | cold_start.p95_ms | ttft.p95_ms | cost.per_task_usd |', '|---|---:|---:|---:|'])
+          for label, cold, ttft, cost in detail:
+            def fmt(v):
+              return '-' if v is None else f"{v:.4f}"
+            lines.append(f'| `{label}` | {fmt(cold)} | {fmt(ttft)} | {fmt(cost)} |')
+
+          Path('matrix-summary.md').write_text('\n'.join(lines) + '\n')
+          print('\n'.join(lines))
+          if failed:
+            raise SystemExit(1)
+          PY
+
+      - name: Append matrix summary to job summary
+        if: always()
+        run: cat matrix-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload matrix summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-matrix-summary-${{ github.event.inputs.mode }}
+          path: matrix-summary.md
