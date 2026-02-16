@@ -148,8 +148,18 @@ impl ReliableProvider {
             .collect::<Vec<_>>()
             .join(",");
         let tool_schema_hash = std::env::var("CRABCLAW_TOOL_SCHEMA_HASH").unwrap_or_default();
-        let cache_context_fingerprint =
-            format!("providers={provider_chain};tools={tool_schema_hash}");
+        let provider_base_url = std::env::var("CRABCLAW_PROVIDER_BASE_URL").unwrap_or_default();
+        let provider_id = std::env::var("CRABCLAW_PROVIDER_ID").unwrap_or_default();
+        let system_prompt_version =
+            std::env::var("CRABCLAW_SYSTEM_PROMPT_VERSION").unwrap_or_default();
+        let auth_style = std::env::var("CRABCLAW_PROVIDER_AUTH_STYLE").unwrap_or_default();
+        let top_p = std::env::var("CRABCLAW_PROVIDER_TOP_P").unwrap_or_default();
+        let max_tokens = std::env::var("CRABCLAW_PROVIDER_MAX_TOKENS").unwrap_or_default();
+        let extra_cache_context =
+            std::env::var("CRABCLAW_PROVIDER_CACHE_CONTEXT").unwrap_or_default();
+        let cache_context_fingerprint = format!(
+            "providers={provider_chain};provider_id={provider_id};base_url={provider_base_url};tools={tool_schema_hash};system_v={system_prompt_version};auth={auth_style};top_p={top_p};max_tokens={max_tokens};extra={extra_cache_context}"
+        );
 
         let hedge_enabled = std::env::var("CRABCLAW_PROVIDER_HEDGE_ENABLED")
             .ok()
