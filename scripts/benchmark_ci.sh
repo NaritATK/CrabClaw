@@ -9,18 +9,23 @@ mkdir -p benchmark/results
 echo "[bench] building release binaries"
 cargo build --release --locked --bin crabclaw --bin benchmarks
 
-COLD_START_SAMPLES=20
+BENCH_ITERATIONS="${CRABCLAW_BENCH_ITERATIONS:-60}"
+if [ "$BENCH_ITERATIONS" -lt 60 ]; then
+  COLD_START_SAMPLES=60
+else
+  COLD_START_SAMPLES="$BENCH_ITERATIONS"
+fi
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 echo "[bench] measuring cold start ($COLD_START_SAMPLES samples)"
-"$PYTHON_BIN" - <<'PY'
+"$PYTHON_BIN" - <<PY
 import json
 import subprocess
 import time
 from pathlib import Path
 
-samples = 20
+samples = int(${COLD_START_SAMPLES})
 vals = []
 for _ in range(samples):
     t0 = time.perf_counter()
