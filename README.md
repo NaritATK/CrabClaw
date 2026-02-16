@@ -95,9 +95,15 @@ curl -fsSL https://raw.githubusercontent.com/NaritATK/CrabClaw/main/scripts/inst
 
 # Linux musl/static target (for Alpine/containers)
 curl -fsSL https://raw.githubusercontent.com/NaritATK/CrabClaw/main/scripts/install.sh | bash -s -- --musl
+
+# Explicit target override
+CRABCLAW_INSTALL_TARGET=x86_64-unknown-linux-musl \
+  curl -fsSL https://raw.githubusercontent.com/NaritATK/CrabClaw/main/scripts/install.sh | bash
 ```
 
 Installer verifies release checksums via `SHA256SUMS` before installation.
+
+Windows is supported via release assets (`crabclaw-*-pc-windows-msvc.zip`) with manual unzip/install.
 
 ```bash
 # Or install from source
