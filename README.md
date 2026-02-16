@@ -84,10 +84,17 @@ Details: `benchmark/README.md`
 ## Quick Start
 
 ```bash
+# One-command installer (latest GitHub release binary)
+curl -fsSL https://raw.githubusercontent.com/NaritATK/CrabClaw/main/scripts/install.sh | bash
+
+# Or install from source
 git clone https://github.com/NaritATK/CrabClaw.git
 cd crabclaw
 cargo build --release
 cargo install --path . --force
+
+# Once published on crates.io:
+# cargo install crabclaw
 
 # Quick setup (no prompts)
 crabclaw onboard --api-key sk-... --provider openrouter
@@ -116,6 +123,8 @@ crabclaw status
 
 # Run system diagnostics
 crabclaw doctor
+crabclaw diagnose
+crabclaw --diagnose
 
 # Check channel health
 crabclaw channel doctor

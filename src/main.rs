@@ -18,6 +18,7 @@ mod channels;
 mod config;
 mod cron;
 mod daemon;
+mod diagnose;
 mod doctor;
 mod gateway;
 mod health;
@@ -139,6 +140,10 @@ enum Commands {
 
     /// Run diagnostics for daemon/scheduler/channel freshness
     Doctor,
+
+    /// Print JSON diagnostics (config + provider + runtime + healthchecks)
+    #[command(long_flag = "diagnose")]
+    Diagnose,
 
     /// Show system status (full details)
     Status,
@@ -407,6 +412,8 @@ async fn main() -> Result<()> {
         Commands::Service { service_command } => service::handle_command(&service_command, &config),
 
         Commands::Doctor => doctor::run(&config),
+
+        Commands::Diagnose => diagnose::run(&config),
 
         Commands::Channel { channel_command } => match channel_command {
             ChannelCommands::Start => channels::start_channels(config).await,
