@@ -164,7 +164,7 @@ run_compare() {
 Regression comparison failed because no baseline file was found.
 Set baseline via env var `CRABCLAW_BENCH_BASELINE` or add the expected baseline file.
 MD
-    printf '\nBaseline path: `%s`\n' "$baseline_path" >>benchmark/results/summary.md
+    printf "\nBaseline path: \`%s\`\n" "$baseline_path" >>benchmark/results/summary.md
     COMPARE_EXIT=1
     return
   fi
@@ -176,7 +176,7 @@ MD
 Regression comparison was skipped for this run because no baseline file was found.
 Set baseline via env var `CRABCLAW_BENCH_BASELINE`.
 MD
-  printf '\nBaseline path: `%s`\n' "$baseline_path" >>benchmark/results/summary.md
+  printf "\nBaseline path: \`%s\`\n" "$baseline_path" >>benchmark/results/summary.md
   COMPARE_EXIT=0
 }
 
