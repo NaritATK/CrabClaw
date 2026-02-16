@@ -92,6 +92,9 @@ Details: `benchmark/README.md`
 ```bash
 # One-command installer (latest GitHub release binary)
 curl -fsSL https://raw.githubusercontent.com/NaritATK/CrabClaw/main/scripts/install.sh | bash
+
+# Linux musl/static target (for Alpine/containers)
+curl -fsSL https://raw.githubusercontent.com/NaritATK/CrabClaw/main/scripts/install.sh | bash -s -- --musl
 ```
 
 ```bash
