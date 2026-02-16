@@ -50,6 +50,7 @@ python3 scripts/merge_benchmark_results.py \
 
 python3 scripts/compare_benchmarks.py \
   --baseline benchmark/baseline.json \
-  --current benchmark/results/latest.full.json
+  --current benchmark/results/latest.full.json \
+  --summary-out benchmark/results/summary.md
 
 echo "[bench] done"

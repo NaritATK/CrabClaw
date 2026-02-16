@@ -32,12 +32,14 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument('--baseline', required=True)
     ap.add_argument('--current', required=True)
+    ap.add_argument('--summary-out')
     args = ap.parse_args()
 
     base = load_metrics(args.baseline)
     cur = load_metrics(args.current)
 
     failed = False
+    rows = []
 
     print('[bench] comparing current against baseline')
     for key, base_v in sorted(base.items()):
@@ -62,13 +64,38 @@ def main() -> int:
             f"[bench] {key}: baseline={fmt(base_v)} current={fmt(cur_v)} "
             f"allowed<={fmt(allowed)} => {status}"
         )
+        rows.append((key, base_v, cur_v, allowed, status))
 
+    hard_fail_rows = []
     for key, limit in HARD_LIMITS.items():
         if key in cur and isinstance(cur[key], (int, float)) and cur[key] > limit:
             print(
                 f"[bench][HARD-FAIL] {key}={fmt(cur[key])} exceeds hard limit {fmt(limit)}"
             )
             failed = True
+            hard_fail_rows.append((key, cur[key], limit))
+
+    if args.summary_out:
+        status_emoji = '❌' if failed else '✅'
+        lines = [
+            f"## {status_emoji} Benchmark Gate {'Failed' if failed else 'Passed'}",
+            '',
+            '| Metric | Baseline | Current | Allowed | Status |',
+            '|---|---:|---:|---:|---|',
+        ]
+        for key, base_v, cur_v, allowed, status in rows:
+            status_cell = '❌ REGRESSION' if status != 'OK' else '✅ OK'
+            lines.append(
+                f"| `{key}` | {fmt(base_v)} | {fmt(cur_v)} | <= {fmt(allowed)} | {status_cell} |"
+            )
+
+        if hard_fail_rows:
+            lines.extend(['', '### Hard Limit Violations'])
+            for key, current, limit in hard_fail_rows:
+                lines.append(f"- `{key}` = {fmt(current)} (limit {fmt(limit)})")
+
+        Path(args.summary_out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.summary_out).write_text('\n'.join(lines) + '\n')
 
     if failed:
         print('[bench] benchmark gate failed')
