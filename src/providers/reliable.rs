@@ -113,6 +113,9 @@ pub struct ReliableProvider {
 
     hedge_enabled: bool,
     hedge_delay_ms: u64,
+    hedge_critical_only: bool,
+    hedge_max_inflight: u64,
+    hedge_inflight: AtomicU64,
     inflight: Mutex<HashMap<String, broadcast::Sender<Result<String, String>>>>,
 }
 
@@ -172,6 +175,15 @@ impl ReliableProvider {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(120);
+        let hedge_critical_only = std::env::var("CRABCLAW_PROVIDER_HEDGE_CRITICAL_ONLY")
+            .ok()
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+            .unwrap_or(false);
+        let hedge_max_inflight = std::env::var("CRABCLAW_PROVIDER_HEDGE_MAX_INFLIGHT")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(4);
 
         Self {
             providers,
@@ -198,6 +210,9 @@ impl ReliableProvider {
             hedge_win_count: AtomicU64::new(0),
             hedge_enabled,
             hedge_delay_ms,
+            hedge_critical_only,
+            hedge_max_inflight,
+            hedge_inflight: AtomicU64::new(0),
             inflight: Mutex::new(HashMap::new()),
         }
     }
@@ -234,6 +249,45 @@ impl ReliableProvider {
         }
         let msg = err.to_string().to_ascii_lowercase();
         msg.contains("timeout") || msg.contains("timed out")
+    }
+
+    fn is_critical_request(&self, system_prompt: Option<&str>, message: &str) -> bool {
+        if !self.hedge_critical_only {
+            return true;
+        }
+        let msg = message.to_ascii_lowercase();
+        if msg.contains("[critical]")
+            || msg.contains("priority:high")
+            || msg.starts_with("!critical")
+        {
+            return true;
+        }
+        system_prompt
+            .map(|s| {
+                let s = s.to_ascii_lowercase();
+                s.contains("[critical]") || s.contains("priority:high")
+            })
+            .unwrap_or(false)
+    }
+
+    fn acquire_hedge_slot(&self) -> bool {
+        loop {
+            let current = self.hedge_inflight.load(Ordering::Relaxed);
+            if current >= self.hedge_max_inflight {
+                return false;
+            }
+            if self
+                .hedge_inflight
+                .compare_exchange(current, current + 1, Ordering::SeqCst, Ordering::Relaxed)
+                .is_ok()
+            {
+                return true;
+            }
+        }
+    }
+
+    fn release_hedge_slot(&self) {
+        self.hedge_inflight.fetch_sub(1, Ordering::SeqCst);
     }
 
     fn inflight_subscribe_or_create(
@@ -482,11 +536,14 @@ impl Provider for ReliableProvider {
             for attempt in 0..=self.max_retries {
                 self.total_calls.fetch_add(1, Ordering::Relaxed);
 
-                let call_result = if self.hedge_enabled
+                let can_hedge = self.hedge_enabled
                     && attempt == 0
                     && idx + 1 < self.providers.len()
                     && self.circuit_allows_call(&self.providers[idx + 1].0)
-                {
+                    && self.is_critical_request(system_prompt, message)
+                    && self.acquire_hedge_slot();
+
+                let call_result = if can_hedge {
                     let (hedge_name, hedge_provider) = &self.providers[idx + 1];
                     self.hedge_launch_count.fetch_add(1, Ordering::Relaxed);
                     let primary =
@@ -503,6 +560,7 @@ impl Provider for ReliableProvider {
                         res = &mut primary => (provider_name.as_str(), res),
                         res = &mut hedge => (hedge_name.as_str(), res),
                     };
+                    self.release_hedge_slot();
                     if winner == hedge_name {
                         self.hedge_win_count.fetch_add(1, Ordering::Relaxed);
                     }
@@ -600,6 +658,16 @@ impl Provider for ReliableProvider {
         }
 
         let mut failures = Vec::new();
+        let last_user_message = messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .map(|m| m.content.as_str())
+            .unwrap_or("");
+        let system_hint = messages
+            .iter()
+            .find(|m| m.role == "system")
+            .map(|m| m.content.as_str());
 
         for (idx, (provider_name, provider)) in self.providers.iter().enumerate() {
             if !self.circuit_allows_call(provider_name) {
@@ -618,11 +686,14 @@ impl Provider for ReliableProvider {
             for attempt in 0..=self.max_retries {
                 self.total_calls.fetch_add(1, Ordering::Relaxed);
 
-                let call_result = if self.hedge_enabled
+                let can_hedge = self.hedge_enabled
                     && attempt == 0
                     && idx + 1 < self.providers.len()
                     && self.circuit_allows_call(&self.providers[idx + 1].0)
-                {
+                    && self.is_critical_request(system_hint, last_user_message)
+                    && self.acquire_hedge_slot();
+
+                let call_result = if can_hedge {
                     let (hedge_name, hedge_provider) = &self.providers[idx + 1];
                     self.hedge_launch_count.fetch_add(1, Ordering::Relaxed);
                     let primary = provider.chat_with_history(messages, model, temperature);
@@ -638,6 +709,7 @@ impl Provider for ReliableProvider {
                         res = &mut primary => (provider_name.as_str(), res),
                         res = &mut hedge => (hedge_name.as_str(), res),
                     };
+                    self.release_hedge_slot();
                     if winner == hedge_name {
                         self.hedge_win_count.fetch_add(1, Ordering::Relaxed);
                     }
