@@ -22,7 +22,11 @@ Results are written to `benchmark/results/latest.full.json`.
 
 ## Baseline policy
 
-- Synthetic baseline file: `benchmark/baseline.json`
+- Default synthetic baseline file: `benchmark/baseline.json`
+- OS-specific synthetic baselines:
+  - `benchmark/baseline.linux.json`
+  - `benchmark/baseline.macos.json`
+  - `benchmark/baseline.windows.json`
 - Optional real-mode baseline file: `benchmark/baseline.real.json`
 - Default allowed regression margin: `+20%`
 - Tight margins for key metrics are configured in `scripts/compare_benchmarks.py`
@@ -42,7 +46,12 @@ CRABCLAW_BENCH_BASELINE=benchmark/baseline.real.json \
 bash scripts/benchmark_ci.sh
 ```
 
-If baseline file does not exist, the script still produces results + summary and skips regression gate.
+Baseline selection order:
+1. `CRABCLAW_BENCH_BASELINE` (if set)
+2. OS-specific default (`baseline.linux/macos/windows.json`)
+3. fallback `benchmark/baseline.json`
+
+If selected baseline file does not exist, the script still produces results + summary and skips regression gate.
 
 ### Real mode env vars
 

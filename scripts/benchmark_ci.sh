@@ -48,7 +48,25 @@ python3 scripts/merge_benchmark_results.py \
   --cold benchmark/results/cold_start.json \
   --out benchmark/results/latest.full.json
 
-BASELINE_PATH="${CRABCLAW_BENCH_BASELINE:-benchmark/baseline.json}"
+if [ -n "${CRABCLAW_BENCH_BASELINE:-}" ]; then
+  BASELINE_PATH="$CRABCLAW_BENCH_BASELINE"
+else
+  OS_NAME="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  case "$OS_NAME" in
+    linux*)
+      BASELINE_PATH="benchmark/baseline.linux.json"
+      ;;
+    darwin*)
+      BASELINE_PATH="benchmark/baseline.macos.json"
+      ;;
+    msys*|mingw*|cygwin*)
+      BASELINE_PATH="benchmark/baseline.windows.json"
+      ;;
+    *)
+      BASELINE_PATH="benchmark/baseline.json"
+      ;;
+  esac
+fi
 
 if [ -f "$BASELINE_PATH" ]; then
   python3 scripts/compare_benchmarks.py \

@@ -27,7 +27,7 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       CRABCLAW_BENCH_MODE: ${{ github.event.inputs.mode == 'real' && 'real' || 'synthetic' }}
-      CRABCLAW_BENCH_BASELINE: ${{ github.event.inputs.mode == 'real' && 'benchmark/baseline.real.json' || 'benchmark/baseline.json' }}
+      CRABCLAW_BENCH_BASELINE: ${{ github.event.inputs.mode == 'real' && 'benchmark/baseline.real.json' || 'benchmark/baseline.linux.json' }}
       CRABCLAW_BENCH_REAL_PROVIDER_URL: ${{ secrets.CRABCLAW_BENCH_REAL_PROVIDER_URL }}
       CRABCLAW_BENCH_REAL_PROVIDER_API_KEY: ${{ secrets.CRABCLAW_BENCH_REAL_PROVIDER_API_KEY }}
       CRABCLAW_BENCH_REAL_PROVIDER_MODEL: ${{ secrets.CRABCLAW_BENCH_REAL_PROVIDER_MODEL }}

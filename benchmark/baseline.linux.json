@@ -1,0 +1,20 @@
+{
+  "metadata": {
+    "timestamp_utc": "2026-02-16T03:11:58.813549952+00:00",
+    "iterations": 60,
+    "note": "Synthetic benchmark suite for regression detection in CI"
+  },
+  "metrics": {
+    "channel.send.p95_ms": 19.463587,
+    "cost.per_task_usd": 0.013499999999999998,
+    "memory.recall.avg_ms": 1.0450139333333335,
+    "memory.recall.p95_ms": 1.144282,
+    "provider.fast.p95_ms": 15.418168,
+    "provider.normal.p95_ms": 33.469991,
+    "tool.exec.p95_ms": 12.355878,
+    "ttft.p95_ms": 15.418168,
+    "cold_start.p95_ms": 5.597674986347556,
+    "cold_start.avg_ms": 5.195017182268202,
+    "samples": 20
+  }
+}
