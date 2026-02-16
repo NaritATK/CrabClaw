@@ -11,8 +11,10 @@ cargo build --release --locked --bin crabclaw --bin benchmarks
 
 COLD_START_SAMPLES=20
 
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+
 echo "[bench] measuring cold start ($COLD_START_SAMPLES samples)"
-python3 - <<'PY'
+"$PYTHON_BIN" - <<'PY'
 import json
 import subprocess
 import time
@@ -43,7 +45,7 @@ PY
 echo "[bench] running synthetic benchmark suite"
 target/release/benchmarks --output benchmark/results/latest.json
 
-python3 scripts/merge_benchmark_results.py \
+"$PYTHON_BIN" scripts/merge_benchmark_results.py \
   --main benchmark/results/latest.json \
   --cold benchmark/results/cold_start.json \
   --out benchmark/results/latest.full.json
@@ -69,7 +71,7 @@ else
 fi
 
 if [ -f "$BASELINE_PATH" ]; then
-  python3 scripts/compare_benchmarks.py \
+  "$PYTHON_BIN" scripts/compare_benchmarks.py \
     --baseline "$BASELINE_PATH" \
     --current benchmark/results/latest.full.json \
     --summary-out benchmark/results/summary.md

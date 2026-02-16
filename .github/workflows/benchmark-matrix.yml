@@ -1,0 +1,87 @@
+name: Benchmark Matrix (Cross-OS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Benchmark mode"
+        required: true
+        default: synthetic
+        type: choice
+        options:
+          - synthetic
+          - real
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark-matrix:
+    name: Benchmark (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux
+            baseline: benchmark/baseline.linux.json
+            python_bin: python3
+          - os: macos-latest
+            label: macos
+            baseline: benchmark/baseline.macos.json
+            python_bin: python3
+          - os: windows-latest
+            label: windows
+            baseline: benchmark/baseline.windows.json
+            python_bin: python
+
+    env:
+      CARGO_TERM_COLOR: always
+      CRABCLAW_BENCH_MODE: ${{ github.event.inputs.mode }}
+      CRABCLAW_BENCH_BASELINE: ${{ github.event.inputs.mode == 'real' && 'benchmark/baseline.real.json' || matrix.baseline }}
+      PYTHON_BIN: ${{ matrix.python_bin }}
+      CRABCLAW_BENCH_REAL_PROVIDER_URL: ${{ secrets.CRABCLAW_BENCH_REAL_PROVIDER_URL }}
+      CRABCLAW_BENCH_REAL_PROVIDER_API_KEY: ${{ secrets.CRABCLAW_BENCH_REAL_PROVIDER_API_KEY }}
+      CRABCLAW_BENCH_REAL_PROVIDER_MODEL: ${{ secrets.CRABCLAW_BENCH_REAL_PROVIDER_MODEL }}
+      CRABCLAW_BENCH_REAL_CHANNEL_WEBHOOK_URL: ${{ secrets.CRABCLAW_BENCH_REAL_CHANNEL_WEBHOOK_URL }}
+      CRABCLAW_BENCH_REAL_TOOL_COMMAND: ${{ secrets.CRABCLAW_BENCH_REAL_TOOL_COMMAND }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.92
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Validate real-mode prerequisites
+        if: github.event.inputs.mode == 'real'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CRABCLAW_BENCH_REAL_PROVIDER_URL:-}" ] || [ -z "${CRABCLAW_BENCH_REAL_PROVIDER_API_KEY:-}" ]; then
+            echo "Real mode requested but provider secrets are missing" >&2
+            exit 1
+          fi
+
+      - name: Run benchmark gate
+        shell: bash
+        run: bash scripts/benchmark_ci.sh
+
+      - name: Append summary to job summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f benchmark/results/summary.md ]; then
+            cat benchmark/results/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## ⚠️ Benchmark summary unavailable" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-${{ matrix.label }}-${{ github.event.inputs.mode }}
+          path: benchmark/results/

@@ -68,5 +68,8 @@ If selected baseline file does not exist, the script still produces results + su
 - GitHub Actions: run workflow **Benchmark Baseline Refresh** (`workflow_dispatch`)
   - supports `mode=synthetic|real`
   - can auto-open a PR with updated baseline file
+- GitHub Actions: run workflow **Benchmark Matrix (Cross-OS)** (`workflow_dispatch`)
+  - runs benchmark gate on `ubuntu`, `macos`, and `windows`
+  - uses OS-specific synthetic baselines automatically
 
 Then commit baseline update with an explanation in PR notes.
