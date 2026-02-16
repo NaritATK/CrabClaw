@@ -13,6 +13,17 @@ pub use traits::{ChatMessage, Provider};
 use compatible::{AuthStyle, OpenAiCompatibleProvider};
 use reliable::ReliableProvider;
 
+pub(crate) fn build_provider_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .pool_max_idle_per_host(16)
+        .tcp_keepalive(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
 const MAX_API_ERROR_CHARS: usize = 200;
 
 fn is_secret_char(c: char) -> bool {

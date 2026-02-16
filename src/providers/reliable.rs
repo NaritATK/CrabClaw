@@ -1,21 +1,18 @@
 use super::traits::ChatMessage;
 use super::Provider;
 use async_trait::async_trait;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 /// Check if an error is non-retryable (client errors that won't resolve with retries).
 fn is_non_retryable(err: &anyhow::Error) -> bool {
-    // Check for reqwest status errors (returned by .error_for_status())
     if let Some(reqwest_err) = err.downcast_ref::<reqwest::Error>() {
         if let Some(status) = reqwest_err.status() {
             let code = status.as_u16();
-            // 4xx client errors are non-retryable, except:
-            // - 429 Too Many Requests (rate limiting, transient)
-            // - 408 Request Timeout (transient)
             return status.is_client_error() && code != 429 && code != 408;
         }
     }
-    // String fallback: scan for any 4xx status code in error message
     let msg = err.to_string();
     for word in msg.split(|c: char| !c.is_ascii_digit()) {
         if let Ok(code) = word.parse::<u16>() {
@@ -27,11 +24,40 @@ fn is_non_retryable(err: &anyhow::Error) -> bool {
     false
 }
 
-/// Provider wrapper with retry + fallback behavior.
+#[derive(Debug, Clone)]
+struct CircuitState {
+    consecutive_failures: u32,
+    open_until: Option<Instant>,
+}
+
+impl CircuitState {
+    fn healthy() -> Self {
+        Self {
+            consecutive_failures: 0,
+            open_until: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CacheEntry {
+    response: String,
+    inserted_at: Instant,
+}
+
+/// Provider wrapper with retry + fallback + circuit-breaker + response-cache.
 pub struct ReliableProvider {
     providers: Vec<(String, Box<dyn Provider>)>,
     max_retries: u32,
     base_backoff_ms: u64,
+
+    circuit_breaker_failure_threshold: u32,
+    circuit_breaker_cooldown_ms: u64,
+    circuit_states: Mutex<HashMap<String, CircuitState>>,
+
+    cache_ttl_secs: u64,
+    cache_max_entries: usize,
+    response_cache: Mutex<HashMap<String, CacheEntry>>,
 }
 
 impl ReliableProvider {
@@ -40,10 +66,157 @@ impl ReliableProvider {
         max_retries: u32,
         base_backoff_ms: u64,
     ) -> Self {
+        let cb_threshold = std::env::var("CRABCLAW_PROVIDER_CB_FAILURE_THRESHOLD")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|v| *v >= 1)
+            .unwrap_or(3);
+
+        let cb_cooldown = std::env::var("CRABCLAW_PROVIDER_CB_COOLDOWN_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|v| *v >= 250)
+            .unwrap_or(30_000);
+
+        let cache_ttl_secs = std::env::var("CRABCLAW_PROVIDER_CACHE_TTL_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(120);
+
+        let cache_max_entries = std::env::var("CRABCLAW_PROVIDER_CACHE_MAX_ENTRIES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(256);
+
         Self {
             providers,
             max_retries,
             base_backoff_ms: base_backoff_ms.max(50),
+            circuit_breaker_failure_threshold: cb_threshold,
+            circuit_breaker_cooldown_ms: cb_cooldown,
+            circuit_states: Mutex::new(HashMap::new()),
+            cache_ttl_secs,
+            cache_max_entries,
+            response_cache: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn cache_key_chat(
+        system_prompt: Option<&str>,
+        message: &str,
+        model: &str,
+        temperature: f64,
+    ) -> String {
+        format!(
+            "chat|{}|{}|{}|{:.4}",
+            system_prompt.unwrap_or_default(),
+            message,
+            model,
+            temperature
+        )
+    }
+
+    fn cache_key_history(messages: &[ChatMessage], model: &str, temperature: f64) -> String {
+        let messages_json = serde_json::to_string(messages).unwrap_or_default();
+        format!("history|{}|{}|{:.4}", messages_json, model, temperature)
+    }
+
+    fn cache_get(&self, key: &str) -> Option<String> {
+        if self.cache_ttl_secs == 0 || self.cache_max_entries == 0 {
+            return None;
+        }
+
+        let ttl = Duration::from_secs(self.cache_ttl_secs);
+        let now = Instant::now();
+
+        let mut cache = self
+            .response_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        cache.retain(|_, v| now.duration_since(v.inserted_at) <= ttl);
+        cache.get(key).map(|entry| entry.response.clone())
+    }
+
+    fn cache_put(&self, key: String, response: String) {
+        if self.cache_ttl_secs == 0 || self.cache_max_entries == 0 {
+            return;
+        }
+
+        let now = Instant::now();
+        let mut cache = self
+            .response_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        cache.insert(
+            key,
+            CacheEntry {
+                response,
+                inserted_at: now,
+            },
+        );
+
+        if cache.len() > self.cache_max_entries {
+            let mut keys: Vec<(String, Instant)> = cache
+                .iter()
+                .map(|(k, v)| (k.clone(), v.inserted_at))
+                .collect();
+            keys.sort_by_key(|(_, ts)| *ts);
+            let to_remove = cache.len().saturating_sub(self.cache_max_entries);
+            for (k, _) in keys.into_iter().take(to_remove) {
+                cache.remove(&k);
+            }
+        }
+    }
+
+    fn circuit_allows_call(&self, provider_name: &str) -> bool {
+        let now = Instant::now();
+        let mut states = self
+            .circuit_states
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let state = states
+            .entry(provider_name.to_string())
+            .or_insert_with(CircuitState::healthy);
+
+        if let Some(until) = state.open_until {
+            if now < until {
+                return false;
+            }
+            state.open_until = None;
+            state.consecutive_failures = 0;
+        }
+        true
+    }
+
+    fn circuit_record_success(&self, provider_name: &str) {
+        let mut states = self
+            .circuit_states
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let state = states
+            .entry(provider_name.to_string())
+            .or_insert_with(CircuitState::healthy);
+        state.consecutive_failures = 0;
+        state.open_until = None;
+    }
+
+    fn circuit_record_failure(&self, provider_name: &str) {
+        let mut states = self
+            .circuit_states
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let state = states
+            .entry(provider_name.to_string())
+            .or_insert_with(CircuitState::healthy);
+
+        state.consecutive_failures = state.consecutive_failures.saturating_add(1);
+        if state.consecutive_failures >= self.circuit_breaker_failure_threshold {
+            state.open_until =
+                Some(Instant::now() + Duration::from_millis(self.circuit_breaker_cooldown_ms));
         }
     }
 }
@@ -67,9 +240,24 @@ impl Provider for ReliableProvider {
         model: &str,
         temperature: f64,
     ) -> anyhow::Result<String> {
+        let cache_key = Self::cache_key_chat(system_prompt, message, model, temperature);
+        if let Some(hit) = self.cache_get(&cache_key) {
+            tracing::debug!("Provider response cache hit (chat_with_system)");
+            return Ok(hit);
+        }
+
         let mut failures = Vec::new();
 
         for (provider_name, provider) in &self.providers {
+            if !self.circuit_allows_call(provider_name) {
+                failures.push(format!("{provider_name}: circuit open"));
+                tracing::warn!(
+                    provider = provider_name,
+                    "Skipping provider due to open circuit breaker"
+                );
+                continue;
+            }
+
             let mut backoff_ms = self.base_backoff_ms;
 
             for attempt in 0..=self.max_retries {
@@ -78,6 +266,7 @@ impl Provider for ReliableProvider {
                     .await
                 {
                     Ok(resp) => {
+                        self.circuit_record_success(provider_name);
                         if attempt > 0 {
                             tracing::info!(
                                 provider = provider_name,
@@ -85,6 +274,7 @@ impl Provider for ReliableProvider {
                                 "Provider recovered after retries"
                             );
                         }
+                        self.cache_put(cache_key.clone(), resp.clone());
                         return Ok(resp);
                     }
                     Err(e) => {
@@ -94,6 +284,8 @@ impl Provider for ReliableProvider {
                             attempt + 1,
                             self.max_retries + 1
                         ));
+
+                        self.circuit_record_failure(provider_name);
 
                         if non_retryable {
                             tracing::warn!(
@@ -129,9 +321,24 @@ impl Provider for ReliableProvider {
         model: &str,
         temperature: f64,
     ) -> anyhow::Result<String> {
+        let cache_key = Self::cache_key_history(messages, model, temperature);
+        if let Some(hit) = self.cache_get(&cache_key) {
+            tracing::debug!("Provider response cache hit (chat_with_history)");
+            return Ok(hit);
+        }
+
         let mut failures = Vec::new();
 
         for (provider_name, provider) in &self.providers {
+            if !self.circuit_allows_call(provider_name) {
+                failures.push(format!("{provider_name}: circuit open"));
+                tracing::warn!(
+                    provider = provider_name,
+                    "Skipping provider due to open circuit breaker"
+                );
+                continue;
+            }
+
             let mut backoff_ms = self.base_backoff_ms;
 
             for attempt in 0..=self.max_retries {
@@ -140,6 +347,7 @@ impl Provider for ReliableProvider {
                     .await
                 {
                     Ok(resp) => {
+                        self.circuit_record_success(provider_name);
                         if attempt > 0 {
                             tracing::info!(
                                 provider = provider_name,
@@ -147,6 +355,7 @@ impl Provider for ReliableProvider {
                                 "Provider recovered after retries"
                             );
                         }
+                        self.cache_put(cache_key.clone(), resp.clone());
                         return Ok(resp);
                     }
                     Err(e) => {
@@ -156,6 +365,8 @@ impl Provider for ReliableProvider {
                             attempt + 1,
                             self.max_retries + 1
                         ));
+
+                        self.circuit_record_failure(provider_name);
 
                         if non_retryable {
                             tracing::warn!(
@@ -348,7 +559,6 @@ mod tests {
 
     #[test]
     fn non_retryable_detects_common_patterns() {
-        // Non-retryable 4xx errors
         assert!(is_non_retryable(&anyhow::anyhow!("400 Bad Request")));
         assert!(is_non_retryable(&anyhow::anyhow!("401 Unauthorized")));
         assert!(is_non_retryable(&anyhow::anyhow!("403 Forbidden")));
@@ -356,16 +566,12 @@ mod tests {
         assert!(is_non_retryable(&anyhow::anyhow!(
             "API error with 400 Bad Request"
         )));
-        // Retryable: 429 Too Many Requests
         assert!(!is_non_retryable(&anyhow::anyhow!("429 Too Many Requests")));
-        // Retryable: 408 Request Timeout
         assert!(!is_non_retryable(&anyhow::anyhow!("408 Request Timeout")));
-        // Retryable: 5xx server errors
         assert!(!is_non_retryable(&anyhow::anyhow!(
             "500 Internal Server Error"
         )));
         assert!(!is_non_retryable(&anyhow::anyhow!("502 Bad Gateway")));
-        // Retryable: transient errors
         assert!(!is_non_retryable(&anyhow::anyhow!("timeout")));
         assert!(!is_non_retryable(&anyhow::anyhow!("connection reset")));
     }
@@ -396,13 +602,12 @@ mod tests {
                     }),
                 ),
             ],
-            3, // 3 retries allowed, but should skip them
+            3,
             1,
         );
 
         let result = provider.chat("hello", "test", 0.0).await.unwrap();
         assert_eq!(result, "from fallback");
-        // Primary should have been called only once (no retries)
         assert_eq!(primary_calls.load(Ordering::SeqCst), 1);
         assert_eq!(fallback_calls.load(Ordering::SeqCst), 1);
     }
@@ -471,5 +676,36 @@ mod tests {
         assert_eq!(result, "fallback ok");
         assert_eq!(primary_calls.load(Ordering::SeqCst), 2);
         assert_eq!(fallback_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cache_hits_for_identical_chat_inputs() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        std::env::set_var("CRABCLAW_PROVIDER_CACHE_TTL_SECS", "300");
+        std::env::set_var("CRABCLAW_PROVIDER_CACHE_MAX_ENTRIES", "128");
+
+        let provider = ReliableProvider::new(
+            vec![(
+                "primary".into(),
+                Box::new(MockProvider {
+                    calls: Arc::clone(&calls),
+                    fail_until_attempt: 0,
+                    response: "cached-response",
+                    error: "n/a",
+                }),
+            )],
+            1,
+            1,
+        );
+
+        let a = provider.chat("same prompt", "m", 0.0).await.unwrap();
+        let b = provider.chat("same prompt", "m", 0.0).await.unwrap();
+
+        assert_eq!(a, "cached-response");
+        assert_eq!(b, "cached-response");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        std::env::remove_var("CRABCLAW_PROVIDER_CACHE_TTL_SECS");
+        std::env::remove_var("CRABCLAW_PROVIDER_CACHE_MAX_ENTRIES");
     }
 }

@@ -40,11 +40,7 @@ impl OpenRouterProvider {
     pub fn new(api_key: Option<&str>) -> Self {
         Self {
             api_key: api_key.map(ToString::to_string),
-            client: Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
-                .connect_timeout(std::time::Duration::from_secs(10))
-                .build()
-                .unwrap_or_else(|_| Client::new()),
+            client: super::build_provider_http_client(),
         }
     }
 }
