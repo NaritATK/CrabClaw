@@ -158,7 +158,7 @@ Every subsystem is a **trait** — swap implementations with config changes and 
 | **Memory** | `Memory` | SQLite with hybrid search (FTS5 + vector cosine similarity), Markdown | Any persistence backend |
 | **Tools** | `Tool` | shell, file_read, file_write, memory_store, memory_recall, memory_forget, browser_open (Brave + allowlist), composio (optional) | Any capability |
 | **Observability** | `Observer` | Noop, Log, Multi | Prometheus, OTel |
-| **Runtime** | `RuntimeAdapter` | Native (Mac/Linux/Pi) | Docker, WASM (planned; unsupported kinds fail fast) |
+| **Runtime** | `RuntimeAdapter` | Native + Docker (non-root, no-new-privileges, cap-drop, pids/mem/cpu limits) | WASM/edge adapters |
 | **Security** | `SecurityPolicy` | Gateway pairing, sandbox, allowlists, rate limits, filesystem scoping, encrypted secrets | — |
 | **Identity** | `IdentityConfig` | OpenClaw (markdown), AIEOS v1.1 (JSON) | Any identity format |
 | **Tunnel** | `Tunnel` | None, Cloudflare, Tailscale, ngrok, Custom | Any tunnel binary |
@@ -169,9 +169,20 @@ Every subsystem is a **trait** — swap implementations with config changes and 
 ### Runtime support (current)
 
 - ✅ Supported today: `runtime.kind = "native"`
-- 🚧 Planned, not implemented yet: Docker / WASM / edge runtimes
+- ✅ Supported today: `runtime.kind = "docker"` (hardened sandbox defaults)
+- 🚧 Planned: WASM / edge runtimes
 
-When an unsupported `runtime.kind` is configured, CrabClaw now exits with a clear error instead of silently falling back to native.
+Docker runtime hardening defaults:
+- non-root execution (`uid:gid 65532:65532`)
+- `no-new-privileges`
+- `--cap-drop ALL`
+- `--pids-limit 256`
+- read-only rootfs + tmpfs for `/tmp` and `/run`
+- explicit network mode + cpu/memory limits from config
+
+Shell execution controls:
+- timeout via `CRABCLAW_SHELL_TIMEOUT_SECS`
+- optional filesystem allowlist via `CRABCLAW_SHELL_FS_ALLOWLIST` (colon-separated absolute roots)
 
 ### Memory System (Full-Stack Search Engine)
 

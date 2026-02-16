@@ -3,11 +3,32 @@ use crate::runtime::RuntimeAdapter;
 use crate::security::SecurityPolicy;
 use async_trait::async_trait;
 use serde_json::json;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 /// Maximum shell command execution time before kill.
 const SHELL_TIMEOUT_SECS: u64 = 60;
+
+fn shell_timeout_secs() -> u64 {
+    std::env::var("CRABCLAW_SHELL_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(SHELL_TIMEOUT_SECS)
+}
+
+fn fs_allowlist_roots() -> Vec<PathBuf> {
+    std::env::var("CRABCLAW_SHELL_FS_ALLOWLIST")
+        .ok()
+        .map(|raw| {
+            raw.split(':')
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| PathBuf::from(s.trim()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
 /// Maximum output size in bytes (1MB).
 const MAX_OUTPUT_BYTES: usize = 1_048_576;
 /// Environment variables safe to pass to shell commands.
@@ -85,6 +106,18 @@ impl Tool for ShellTool {
             }
         }
 
+        let fs_allowlist = fs_allowlist_roots();
+        if let Err(reason) = self
+            .security
+            .validate_command_fs_allowlist(command, &fs_allowlist)
+        {
+            return Ok(ToolResult {
+                success: false,
+                output: String::new(),
+                error: Some(reason),
+            });
+        }
+
         if !self.security.record_action() {
             return Ok(ToolResult {
                 success: false,
@@ -117,8 +150,8 @@ impl Tool for ShellTool {
             }
         }
 
-        let result =
-            tokio::time::timeout(Duration::from_secs(SHELL_TIMEOUT_SECS), cmd.output()).await;
+        let timeout_secs = shell_timeout_secs();
+        let result = tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output()).await;
 
         match result {
             Ok(Ok(output)) => {
@@ -154,7 +187,7 @@ impl Tool for ShellTool {
                 success: false,
                 output: String::new(),
                 error: Some(format!(
-                    "Command timed out after {SHELL_TIMEOUT_SECS}s and was killed"
+                    "Command timed out after {timeout_secs}s and was killed"
                 )),
             }),
         }
@@ -364,5 +397,27 @@ mod tests {
         assert!(allowed.success);
 
         let _ = std::fs::remove_file(std::env::temp_dir().join("crabclaw_shell_approval_test"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn shell_blocks_paths_outside_fs_allowlist() {
+        let _guard = EnvGuard::set("CRABCLAW_SHELL_FS_ALLOWLIST", "/tmp/crabclaw-shell-allowed");
+        let security = Arc::new(SecurityPolicy {
+            autonomy: AutonomyLevel::Supervised,
+            workspace_dir: std::env::temp_dir(),
+            allowed_commands: vec!["cat".into()],
+            ..SecurityPolicy::default()
+        });
+        let tool = ShellTool::new(security, test_runtime());
+        let result = tool
+            .execute(json!({"command": "cat /etc/passwd"}))
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("outside allowlist"));
     }
 }

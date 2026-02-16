@@ -93,7 +93,17 @@ impl RuntimeAdapter for DockerRuntime {
             .arg("run")
             .arg("--rm")
             .arg("--init")
-            .arg("--interactive");
+            .arg("--interactive")
+            .arg("--user")
+            .arg("65532:65532")
+            .arg("--pids-limit")
+            .arg("256")
+            .arg("--security-opt")
+            .arg("no-new-privileges:true")
+            .arg("--cap-drop")
+            .arg("ALL")
+            .arg("--tmpfs")
+            .arg("/tmp:rw,noexec,nosuid,nodev,size=64m");
 
         let network = self.config.network.trim();
         if !network.is_empty() {
@@ -109,7 +119,10 @@ impl RuntimeAdapter for DockerRuntime {
         }
 
         if self.config.read_only_rootfs {
-            process.arg("--read-only");
+            process
+                .arg("--read-only")
+                .arg("--tmpfs")
+                .arg("/run:rw,noexec,nosuid,nodev,size=16m");
         }
 
         if self.config.mount_workspace {
@@ -181,6 +194,11 @@ mod tests {
         assert!(debug.contains("128m"));
         assert!(debug.contains("--cpus"));
         assert!(debug.contains("1.5"));
+        assert!(debug.contains("--user"));
+        assert!(debug.contains("65532:65532"));
+        assert!(debug.contains("--pids-limit"));
+        assert!(debug.contains("--cap-drop"));
+        assert!(debug.contains("--security-opt"));
         assert!(debug.contains("--workdir"));
         assert!(debug.contains("echo hello"));
     }

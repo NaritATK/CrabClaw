@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -165,6 +165,20 @@ fn skip_env_assignments(s: &str) -> &str {
             return rest;
         }
     }
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 impl SecurityPolicy {
@@ -396,6 +410,73 @@ impl SecurityPolicy {
         });
 
         has_cmd
+    }
+
+    /// Validate filesystem path arguments in a shell command against an allowlist.
+    ///
+    /// `allowed_roots` should contain absolute directories. When empty, defaults
+    /// to the workspace root only.
+    pub fn validate_command_fs_allowlist(
+        &self,
+        command: &str,
+        allowed_roots: &[PathBuf],
+    ) -> Result<(), String> {
+        let roots: Vec<PathBuf> = if allowed_roots.is_empty() {
+            vec![self
+                .workspace_dir
+                .canonicalize()
+                .unwrap_or_else(|_| self.workspace_dir.clone())]
+        } else {
+            allowed_roots
+                .iter()
+                .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
+                .collect()
+        };
+
+        for token in command.split_whitespace() {
+            if token.starts_with('-') || token.contains('*') || token.contains('?') {
+                continue;
+            }
+
+            let trimmed = token.trim_matches(|c| c == '\'' || c == '"');
+            let looks_like_path = trimmed.starts_with('/')
+                || trimmed.starts_with("./")
+                || trimmed.starts_with("../")
+                || trimmed.starts_with("~/")
+                || trimmed.contains('/');
+            if !looks_like_path {
+                continue;
+            }
+
+            let candidate = if let Some(stripped) = trimmed.strip_prefix("~/") {
+                if let Ok(home) = std::env::var("HOME") {
+                    PathBuf::from(home).join(stripped)
+                } else {
+                    PathBuf::from(trimmed)
+                }
+            } else if Path::new(trimmed).is_absolute() {
+                PathBuf::from(trimmed)
+            } else {
+                self.workspace_dir.join(trimmed)
+            };
+
+            let normalized = if candidate.exists() {
+                candidate
+                    .canonicalize()
+                    .unwrap_or_else(|_| normalize_path(&candidate))
+            } else {
+                normalize_path(&candidate)
+            };
+
+            if !roots.iter().any(|root| normalized.starts_with(root)) {
+                return Err(format!(
+                    "Filesystem path outside allowlist for shell execution: {}",
+                    trimmed
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     /// Check if a file path is allowed (no path traversal, within workspace)
@@ -1219,5 +1300,32 @@ mod tests {
                 "Default forbidden_paths must include {dot}"
             );
         }
+    }
+
+    #[test]
+    fn fs_allowlist_allows_workspace_relative_paths() {
+        let workspace = std::env::temp_dir().join("crabclaw_policy_allowlist");
+        let p = SecurityPolicy {
+            workspace_dir: workspace.clone(),
+            ..SecurityPolicy::default()
+        };
+        let roots = vec![workspace];
+        assert!(p
+            .validate_command_fs_allowlist("cat ./notes/today.md", &roots)
+            .is_ok());
+    }
+
+    #[test]
+    fn fs_allowlist_blocks_outside_absolute_paths() {
+        let workspace = std::env::temp_dir().join("crabclaw_policy_allowlist2");
+        let p = SecurityPolicy {
+            workspace_dir: workspace.clone(),
+            ..SecurityPolicy::default()
+        };
+        let roots = vec![workspace];
+        let err = p
+            .validate_command_fs_allowlist("cat /etc/passwd", &roots)
+            .unwrap_err();
+        assert!(err.contains("outside allowlist"));
     }
 }
