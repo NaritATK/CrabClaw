@@ -4,12 +4,14 @@ This directory contains the baseline and outputs for CrabClaw performance/cost r
 
 ## What is measured
 
-- `cold_start.p95_ms` and `cold_start.avg_ms`
-- `ttft.p95_ms` (synthetic first-token latency proxy)
-- `provider.fast.p95_ms`, `provider.normal.p95_ms`
-- `channel.send.p95_ms`
-- `tool.exec.p95_ms`
-- `memory.recall.p95_ms`, `memory.recall.avg_ms`
+For each latency family, CrabClaw records **median, p90, p95** and keeps raw samples.
+
+- cold start: `cold_start.median_ms`, `cold_start.p90_ms`, `cold_start.p95_ms`, `cold_start.avg_ms`
+- TTFT proxy: `ttft.median_ms`, `ttft.p90_ms`, `ttft.p95_ms`
+- provider latency: `provider.fast.*`, `provider.normal.*`
+- channel latency: `channel.send.*`
+- tool latency: `tool.exec.*`
+- memory recall latency: `memory.recall.*`
 - `cost.per_task_usd` (synthetic reference task)
 
 ## Run locally
@@ -19,6 +21,8 @@ bash scripts/benchmark_ci.sh
 ```
 
 Results are written to `benchmark/results/latest.full.json`.
+
+Raw samples are stored in benchmark artifacts (`raw_samples_ms` in `latest.full.json`) for flake/debug analysis.
 
 ## Baseline policy
 

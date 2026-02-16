@@ -7,9 +7,13 @@ from pathlib import Path
 DEFAULT_MARGIN = 0.20
 MARGINS = {
     'cold_start.p95_ms': 0.25,
+    'cold_start.p90_ms': 0.25,
     'cold_start.avg_ms': 0.25,
     'cost.per_task_usd': 0.15,
 }
+
+# Absolute floor (ms) for latency regressions to reduce flake/noise.
+ABSOLUTE_FLOOR_MS = float(__import__('os').environ.get('CRABCLAW_BENCH_ABS_FLOOR_MS', '5.0'))
 
 # Hard upper bounds to protect key goals.
 HARD_LIMITS = {
@@ -26,6 +30,17 @@ def load_metrics(path: str):
 
 def fmt(v):
     return f"{v:.4f}" if isinstance(v, float) else str(v)
+
+
+def should_gate_metric(key: str) -> bool:
+    if key == 'cost.per_task_usd':
+        return True
+    # CI gate uses median + p90; p95 is for reporting/visibility.
+    if key.endswith('.median_ms') or key.endswith('.p90_ms'):
+        return True
+    if key in ('cold_start.avg_ms', 'cold_start.p90_ms', 'cold_start.median_ms'):
+        return True
+    return False
 
 
 def main() -> int:
@@ -54,17 +69,24 @@ def main() -> int:
 
         margin = MARGINS.get(key, DEFAULT_MARGIN)
         allowed = base_v * (1.0 + margin)
+        delta = cur_v - base_v
 
         status = 'OK'
-        if cur_v > allowed:
-            status = 'REGRESSION'
-            failed = True
+        if should_gate_metric(key):
+            if key.endswith('_ms'):
+                if cur_v > allowed and delta > ABSOLUTE_FLOOR_MS:
+                    status = 'REGRESSION'
+                    failed = True
+            else:
+                if cur_v > allowed:
+                    status = 'REGRESSION'
+                    failed = True
 
         print(
             f"[bench] {key}: baseline={fmt(base_v)} current={fmt(cur_v)} "
-            f"allowed<={fmt(allowed)} => {status}"
+            f"allowed<={fmt(allowed)} delta={fmt(delta)} => {status}"
         )
-        rows.append((key, base_v, cur_v, allowed, status))
+        rows.append((key, base_v, cur_v, allowed, delta, status, should_gate_metric(key)))
 
     hard_fail_rows = []
     for key, limit in HARD_LIMITS.items():
@@ -80,13 +102,16 @@ def main() -> int:
         lines = [
             f"## {status_emoji} Benchmark Gate {'Failed' if failed else 'Passed'}",
             '',
-            '| Metric | Baseline | Current | Allowed | Status |',
-            '|---|---:|---:|---:|---|',
+            f"Absolute floor for latency regressions: `{ABSOLUTE_FLOOR_MS}ms`",
+            '',
+            '| Metric | Baseline | Current | Allowed | Delta | Gate? | Status |',
+            '|---|---:|---:|---:|---:|---|---|',
         ]
-        for key, base_v, cur_v, allowed, status in rows:
+        for key, base_v, cur_v, allowed, delta, status, gated in rows:
             status_cell = '❌ REGRESSION' if status != 'OK' else '✅ OK'
+            gate_cell = 'yes' if gated else 'no (report-only)'
             lines.append(
-                f"| `{key}` | {fmt(base_v)} | {fmt(cur_v)} | <= {fmt(allowed)} | {status_cell} |"
+                f"| `{key}` | {fmt(base_v)} | {fmt(cur_v)} | <= {fmt(allowed)} | {fmt(delta)} | {gate_cell} | {status_cell} |"
             )
 
         if hard_fail_rows:

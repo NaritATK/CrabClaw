@@ -31,15 +31,26 @@ for _ in range(samples):
     vals.append((time.perf_counter() - t0) * 1000.0)
 
 vals_sorted = sorted(vals)
-idx = round((len(vals_sorted)-1)*0.95)
-p95 = vals_sorted[idx]
+def pct(p):
+    i = round((len(vals_sorted)-1)*p)
+    return vals_sorted[i]
+p50 = pct(0.50)
+p90 = pct(0.90)
+p95 = pct(0.95)
 avg = sum(vals_sorted)/len(vals_sorted)
 Path('benchmark/results/cold_start.json').write_text(json.dumps({
+    'cold_start.median_ms': p50,
+    'cold_start.p90_ms': p90,
     'cold_start.p95_ms': p95,
     'cold_start.avg_ms': avg,
     'samples': len(vals_sorted)
 }, indent=2))
-print(f"[bench] cold_start p95={p95:.2f}ms avg={avg:.2f}ms")
+Path('benchmark/results/cold_start_samples.json').write_text(json.dumps({
+    'raw_samples_ms': {
+        'cold_start': vals
+    }
+}, indent=2))
+print(f"[bench] cold_start p90={p90:.2f}ms p95={p95:.2f}ms avg={avg:.2f}ms")
 PY
 
 echo "[bench] running synthetic benchmark suite"
@@ -48,6 +59,7 @@ target/release/benchmarks --output benchmark/results/latest.json
 "$PYTHON_BIN" scripts/merge_benchmark_results.py \
   --main benchmark/results/latest.json \
   --cold benchmark/results/cold_start.json \
+  --cold-samples benchmark/results/cold_start_samples.json \
   --out benchmark/results/latest.full.json
 
 if [ -n "${CRABCLAW_BENCH_BASELINE:-}" ]; then

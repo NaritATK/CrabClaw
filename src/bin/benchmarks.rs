@@ -15,6 +15,7 @@ use serde::Serialize;
 struct BenchmarkReport {
     metadata: BenchmarkMetadata,
     metrics: BTreeMap<String, f64>,
+    raw_samples_ms: BTreeMap<String, Vec<f64>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -249,6 +250,15 @@ fn average(samples: &[f64]) -> f64 {
     samples.iter().sum::<f64>() / samples.len() as f64
 }
 
+fn insert_latency_metrics(metrics: &mut BTreeMap<String, f64>, key_prefix: &str, samples: &[f64]) {
+    metrics.insert(
+        format!("{key_prefix}.median_ms"),
+        percentile_ms(samples, 0.50),
+    );
+    metrics.insert(format!("{key_prefix}.p90_ms"), percentile_ms(samples, 0.90));
+    metrics.insert(format!("{key_prefix}.p95_ms"), percentile_ms(samples, 0.95));
+}
+
 fn env_usize(key: &str, default: usize) -> usize {
     std::env::var(key)
         .ok()
@@ -448,28 +458,16 @@ async fn main() -> anyhow::Result<()> {
     let ttft_p95 = percentile_ms(&provider_fast, 0.95);
 
     let mut metrics = BTreeMap::new();
-    metrics.insert(
-        "provider.fast.p95_ms".to_string(),
-        percentile_ms(&provider_fast, 0.95),
-    );
-    metrics.insert(
-        "provider.normal.p95_ms".to_string(),
-        percentile_ms(&provider_normal, 0.95),
-    );
-    metrics.insert(
-        "channel.send.p95_ms".to_string(),
-        percentile_ms(&channel_lat, 0.95),
-    );
-    metrics.insert(
-        "tool.exec.p95_ms".to_string(),
-        percentile_ms(&tool_lat, 0.95),
-    );
-    metrics.insert(
-        "memory.recall.p95_ms".to_string(),
-        percentile_ms(&memory_recall, 0.95),
-    );
+    insert_latency_metrics(&mut metrics, "provider.fast", &provider_fast);
+    insert_latency_metrics(&mut metrics, "provider.normal", &provider_normal);
+    insert_latency_metrics(&mut metrics, "channel.send", &channel_lat);
+    insert_latency_metrics(&mut metrics, "tool.exec", &tool_lat);
+    insert_latency_metrics(&mut metrics, "memory.recall", &memory_recall);
+
     metrics.insert("memory.recall.avg_ms".to_string(), average(&memory_recall));
+    metrics.insert("ttft.p90_ms".to_string(), percentile_ms(&provider_fast, 0.90));
     metrics.insert("ttft.p95_ms".to_string(), ttft_p95);
+    metrics.insert("ttft.median_ms".to_string(), percentile_ms(&provider_fast, 0.50));
     metrics.insert(
         "cost.per_task_usd".to_string(),
         benchmark_cost_per_task_usd(),
@@ -483,6 +481,13 @@ async fn main() -> anyhow::Result<()> {
         },
     );
 
+    let mut raw_samples_ms = BTreeMap::new();
+    raw_samples_ms.insert("provider.fast".to_string(), provider_fast.clone());
+    raw_samples_ms.insert("provider.normal".to_string(), provider_normal.clone());
+    raw_samples_ms.insert("channel.send".to_string(), channel_lat.clone());
+    raw_samples_ms.insert("tool.exec".to_string(), tool_lat.clone());
+    raw_samples_ms.insert("memory.recall".to_string(), memory_recall.clone());
+
     let report = BenchmarkReport {
         metadata: BenchmarkMetadata {
             timestamp_utc: chrono::Utc::now().to_rfc3339(),
@@ -490,6 +495,7 @@ async fn main() -> anyhow::Result<()> {
             note: note_parts.join("; "),
         },
         metrics,
+        raw_samples_ms,
     };
 
     if let Some(parent) = output_path.parent() {
