@@ -117,7 +117,7 @@ crabclaw migrate openclaw
 
 ## Architecture
 
-Every subsystem is a **trait** — swap implementations with a config change, zero code changes.
+Every subsystem is a **trait** — swap implementations with config changes and minimal integration edits.
 
 <p align="center">
   <img src="docs/architecture.svg" alt="CrabClaw Architecture" width="900" />
