@@ -25,10 +25,10 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             artifact: crabclaw
-          - os: macos-latest
+          - os: macos-13
             target: x86_64-apple-darwin
             artifact: crabclaw
-          - os: macos-latest
+          - os: macos-14
             target: aarch64-apple-darwin
             artifact: crabclaw
           - os: windows-latest
@@ -51,6 +51,9 @@ jobs:
           sudo apt-get install -y musl-tools
 
       - name: Build release
+        env:
+          CC_x86_64_unknown_linux_musl: ${{ contains(matrix.target, 'musl') && 'musl-gcc' || '' }}
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: ${{ contains(matrix.target, 'musl') && 'musl-gcc' || '' }}
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Check binary size (Unix)
