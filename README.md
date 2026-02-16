@@ -97,6 +97,8 @@ curl -fsSL https://raw.githubusercontent.com/NaritATK/CrabClaw/main/scripts/inst
 curl -fsSL https://raw.githubusercontent.com/NaritATK/CrabClaw/main/scripts/install.sh | bash -s -- --musl
 ```
 
+Installer verifies release checksums via `SHA256SUMS` before installation.
+
 ```bash
 # Or install from source
 git clone https://github.com/NaritATK/CrabClaw.git

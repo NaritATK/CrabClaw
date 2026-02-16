@@ -94,6 +94,7 @@ else
 fi
 
 ASSET="${BIN_NAME}-${TARGET}.tar.gz"
+CHECKSUMS_ASSET="SHA256SUMS"
 
 if ! command -v curl >/dev/null 2>&1; then
   echo "curl is required" >&2
@@ -109,8 +110,37 @@ tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
 
 url="https://github.com/${REPO}/releases/latest/download/${ASSET}"
+checksums_url="https://github.com/${REPO}/releases/latest/download/${CHECKSUMS_ASSET}"
+
 echo "Downloading $url"
 curl -fsSL "$url" -o "$tmpdir/$ASSET"
+
+echo "Downloading ${CHECKSUMS_ASSET}"
+curl -fsSL "$checksums_url" -o "$tmpdir/$CHECKSUMS_ASSET"
+
+expected=$(grep " ${ASSET}$" "$tmpdir/$CHECKSUMS_ASSET" | awk '{print $1}' | head -n1)
+if [[ -z "$expected" ]]; then
+  echo "Missing checksum entry for $ASSET" >&2
+  exit 1
+fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+  actual=$(sha256sum "$tmpdir/$ASSET" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then
+  actual=$(shasum -a 256 "$tmpdir/$ASSET" | awk '{print $1}')
+else
+  echo "Neither sha256sum nor shasum found; cannot verify release checksum" >&2
+  exit 1
+fi
+
+if [[ "$expected" != "$actual" ]]; then
+  echo "Checksum verification failed for $ASSET" >&2
+  echo "expected: $expected" >&2
+  echo "actual:   $actual" >&2
+  exit 1
+fi
+
+echo "Checksum verified for $ASSET"
 
 tar -xzf "$tmpdir/$ASSET" -C "$tmpdir"
 install -m 0755 "$tmpdir/$BIN_NAME" "$INSTALL_DIR/$BIN_NAME"

@@ -93,6 +93,16 @@ jobs:
         with:
           path: artifacts
 
+      - name: Generate SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          find . -type f \( -name 'crabclaw-*.tar.gz' -o -name 'crabclaw-*.zip' \) -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
