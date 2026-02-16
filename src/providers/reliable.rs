@@ -1101,4 +1101,94 @@ mod tests {
         std::env::remove_var("CRABCLAW_PROVIDER_CACHE_TTL_SECS");
         std::env::remove_var("CRABCLAW_PROVIDER_CACHE_MAX_ENTRIES");
     }
+
+    #[test]
+    fn cache_key_includes_context_fingerprint_fields() {
+        std::env::set_var("CRABCLAW_PROVIDER_BASE_URL", "https://api.example.com");
+        std::env::set_var("CRABCLAW_PROVIDER_ID", "tenant-a");
+        std::env::set_var("CRABCLAW_TOOL_SCHEMA_HASH", "toolhash123");
+        std::env::set_var("CRABCLAW_SYSTEM_PROMPT_VERSION", "v42");
+        std::env::set_var("CRABCLAW_PROVIDER_AUTH_STYLE", "bearer");
+        std::env::set_var("CRABCLAW_PROVIDER_TOP_P", "0.9");
+        std::env::set_var("CRABCLAW_PROVIDER_MAX_TOKENS", "512");
+        std::env::set_var("CRABCLAW_PROVIDER_CACHE_CONTEXT", "ctx-extra");
+
+        let provider = ReliableProvider::new(
+            vec![(
+                "primary".into(),
+                Box::new(MockProvider {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                    fail_until_attempt: 0,
+                    response: "ok",
+                    error: "n/a",
+                }),
+            )],
+            0,
+            1,
+        );
+
+        let key = provider.cache_key_chat(Some("sys"), "hello", "m", 0.2);
+        assert!(key.contains("api.example.com"));
+        assert!(key.contains("tenant-a"));
+        assert!(key.contains("toolhash123"));
+        assert!(key.contains("v42"));
+        assert!(key.contains("bearer"));
+        assert!(key.contains("0.9"));
+        assert!(key.contains("512"));
+        assert!(key.contains("ctx-extra"));
+
+        std::env::remove_var("CRABCLAW_PROVIDER_BASE_URL");
+        std::env::remove_var("CRABCLAW_PROVIDER_ID");
+        std::env::remove_var("CRABCLAW_TOOL_SCHEMA_HASH");
+        std::env::remove_var("CRABCLAW_SYSTEM_PROMPT_VERSION");
+        std::env::remove_var("CRABCLAW_PROVIDER_AUTH_STYLE");
+        std::env::remove_var("CRABCLAW_PROVIDER_TOP_P");
+        std::env::remove_var("CRABCLAW_PROVIDER_MAX_TOKENS");
+        std::env::remove_var("CRABCLAW_PROVIDER_CACHE_CONTEXT");
+    }
+
+    #[tokio::test]
+    async fn circuit_breaker_transitions_open_reject_half_open() {
+        std::env::set_var("CRABCLAW_PROVIDER_CB_FAILURE_THRESHOLD", "1");
+        std::env::set_var("CRABCLAW_PROVIDER_CB_COOLDOWN_MS", "250");
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = ReliableProvider::new(
+            vec![(
+                "primary".into(),
+                Box::new(MockProvider {
+                    calls: Arc::clone(&calls),
+                    fail_until_attempt: 1,
+                    response: "recovered",
+                    error: "temporary",
+                }),
+            )],
+            0,
+            1,
+        );
+
+        // 1) first call fails and opens circuit
+        assert!(provider.chat("hello", "test", 0.0).await.is_err());
+
+        // 2) immediate second call should be rejected by open circuit (no extra underlying call)
+        assert!(provider.chat("hello", "test", 0.0).await.is_err());
+        let stats_after_reject = provider.stats_snapshot();
+        assert!(stats_after_reject.circuit_open_count >= 1);
+        assert!(stats_after_reject.circuit_reject_count >= 1);
+        assert_eq!(stats_after_reject.circuit_state, 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        // 3) after cooldown, call is allowed as half-open probe and succeeds
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let result = provider.chat("hello", "test", 0.0).await.unwrap();
+        assert_eq!(result, "recovered");
+
+        let stats_after_recovery = provider.stats_snapshot();
+        assert!(stats_after_recovery.circuit_half_open_count >= 1);
+        assert_eq!(stats_after_recovery.circuit_state, 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        std::env::remove_var("CRABCLAW_PROVIDER_CB_FAILURE_THRESHOLD");
+        std::env::remove_var("CRABCLAW_PROVIDER_CB_COOLDOWN_MS");
+    }
 }
