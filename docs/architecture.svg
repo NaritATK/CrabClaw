@@ -28,7 +28,7 @@
 
   <!-- Title -->
   <text x="550" y="38" text-anchor="middle" fill="#e6edf3" font-size="22" font-weight="700">CrabClaw Architecture</text>
-  <text x="550" y="58" text-anchor="middle" fill="#7d8590" font-size="12">Zero overhead. Zero compromise. 100% Rust. 100% Agnostic. 8 pluggable traits.</text>
+  <text x="550" y="58" text-anchor="middle" fill="#7d8590" font-size="12">Zero overhead. Zero compromise. 100% Rust. Production-safe defaults with pluggable traits.</text>
 
   <!-- ═══════════ LEFT: Chat Apps ═══════════ -->
   <rect x="20" y="80" width="150" height="310" rx="10" fill="#1c2333" stroke="#3b82f6" stroke-width="1.5" filter="url(#shadow)"/>
@@ -83,7 +83,7 @@
   <!-- Encrypted Secrets -->
   <rect x="213" y="340" width="165" height="38" rx="8" fill="#292524" stroke="#f59e0b" stroke-width="1" stroke-dasharray="4,2"/>
   <text x="295" y="358" text-anchor="middle" fill="#fbbf24" font-size="10" font-weight="600">Encrypted Secrets</text>
-  <text x="295" y="372" text-anchor="middle" fill="#a8a29e" font-size="8">XOR + local key file (0600)</text>
+  <text x="295" y="372" text-anchor="middle" fill="#a8a29e" font-size="8">AEAD encryption + local key file (0600)</text>
 
   <!-- Arrow: Security → Agent -->
   <line x1="295" y1="390" x2="295" y2="415" stroke="#f59e0b" stroke-width="2" marker-end="url(#arrowAmber)"/>
@@ -235,12 +235,12 @@
   <rect x="570" y="570" width="250" height="170" rx="10" fill="#1c2333" stroke="#ef4444" stroke-width="1.5" filter="url(#shadow)"/>
   <text x="695" y="595" text-anchor="middle" fill="#fca5a5" font-size="13" font-weight="600">Sandbox</text>
 
-  <text x="695" y="618" text-anchor="middle" fill="#ef4444" font-size="9">Command allowlist</text>
+  <text x="695" y="618" text-anchor="middle" fill="#ef4444" font-size="9">Command allowlist + risk gates</text>
   <text x="695" y="635" text-anchor="middle" fill="#ef4444" font-size="9">Path jail + traversal block</text>
-  <text x="695" y="652" text-anchor="middle" fill="#ef4444" font-size="9">Browser domain allowlist</text>
-  <text x="695" y="669" text-anchor="middle" fill="#ef4444" font-size="9">Null byte + Symlink escape block</text>
-  <text x="695" y="686" text-anchor="middle" fill="#ef4444" font-size="9">System dirs + Dotfiles blocked</text>
-  <text x="695" y="706" text-anchor="middle" fill="#ef4444" font-size="9">Default: Supervised + workspace-only</text>
+  <text x="695" y="652" text-anchor="middle" fill="#ef4444" font-size="9">Docker non-root + no-new-privileges</text>
+  <text x="695" y="669" text-anchor="middle" fill="#ef4444" font-size="9">Null byte + symlink escape block</text>
+  <text x="695" y="686" text-anchor="middle" fill="#ef4444" font-size="9">System dirs + dotfiles blocked</text>
+  <text x="695" y="706" text-anchor="middle" fill="#ef4444" font-size="9">Default: supervised + workspace-only</text>
   <text x="695" y="726" text-anchor="middle" fill="#ef4444" font-size="9">Levels: ReadOnly / Supervised / Full</text>
 
   <!-- Arrow: Agent → Sandbox -->
@@ -253,7 +253,7 @@
   <text x="960" y="640" text-anchor="middle" fill="#22d3ee" font-size="9">Scheduled actions</text>
   <text x="960" y="660" text-anchor="middle" fill="#22d3ee" font-size="9">Skills loader (TOML manifests)</text>
   <text x="960" y="680" text-anchor="middle" fill="#22d3ee" font-size="9">50+ integrations registry</text>
-  <text x="960" y="700" text-anchor="middle" fill="#22d3ee" font-size="9">Observability (noop/log/multi)</text>
+  <text x="960" y="700" text-anchor="middle" fill="#22d3ee" font-size="9">Observability (log/prometheus/otel)</text>
 
   <!-- Arrow: Agent → Heartbeat -->
   <line x1="960" y1="550" x2="960" y2="570" stroke="#06b6d4" stroke-width="2"/>
@@ -308,5 +308,5 @@
   <text x="550" y="907" text-anchor="middle" fill="#4ade80" font-size="12" font-weight="600">Ready -- crabclaw agent</text>
 
   <!-- Footer stats -->
-  <text x="550" y="942" text-anchor="middle" fill="#7d8590" font-size="10">~3.4MB binary  |  &lt;10ms startup  |  1,050 tests  |  22+ providers  |  8 traits  |  18,900+ lines of Rust  |  0 clippy warnings</text>
+  <text x="550" y="942" text-anchor="middle" fill="#7d8590" font-size="10">~3.4MB binary  |  &lt;10ms startup  |  2,100+ tests  |  22+ providers  |  pluggable traits  |  production hardening  |  0 clippy warnings</text>
 </svg>
