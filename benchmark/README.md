@@ -65,7 +65,9 @@ Baseline selection order:
 2. OS-specific default (`baseline.linux/macos/windows.json`)
 3. fallback `benchmark/baseline.json`
 
-If selected baseline file does not exist, the script still produces results + summary and skips regression gate.
+If selected baseline file does not exist:
+- strict mode (`CRABCLAW_BENCH_STRICT=1`, default in CI) fails the benchmark gate
+- non-strict mode (`CRABCLAW_BENCH_STRICT=0`, default local) still produces results + summary and skips regression gate
 
 ### Real mode env vars
 

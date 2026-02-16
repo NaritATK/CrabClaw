@@ -87,6 +87,15 @@ else
   esac
 fi
 
+BENCH_STRICT="${CRABCLAW_BENCH_STRICT:-}"
+if [ -z "$BENCH_STRICT" ]; then
+  if [ -n "${CI:-}" ]; then
+    BENCH_STRICT=1
+  else
+    BENCH_STRICT=0
+  fi
+fi
+
 COMPARE_EXIT=0
 
 if [ -f "$BASELINE_PATH" ]; then
@@ -98,15 +107,27 @@ if [ -f "$BASELINE_PATH" ]; then
     COMPARE_EXIT=$?
   fi
 else
-  echo "[bench] baseline not found at $BASELINE_PATH; skipping regression gate"
-  cat > benchmark/results/summary.md <<'MD'
+  if [ "$BENCH_STRICT" = "1" ]; then
+    echo "[bench][ERROR] baseline not found at $BASELINE_PATH (strict mode)"
+    cat > benchmark/results/summary.md <<'MD'
+## ❌ Benchmark baseline missing (strict mode)
+
+Regression comparison failed because no baseline file was found.
+Set baseline via env var `CRABCLAW_BENCH_BASELINE` or add the expected baseline file.
+MD
+    printf '\nBaseline path: `%s`\n' "$BASELINE_PATH" >> benchmark/results/summary.md
+    COMPARE_EXIT=1
+  else
+    echo "[bench] baseline not found at $BASELINE_PATH; skipping regression gate"
+    cat > benchmark/results/summary.md <<'MD'
 ## ⚠️ Benchmark baseline not found
 
 Regression comparison was skipped for this run because no baseline file was found.
 Set baseline via env var `CRABCLAW_BENCH_BASELINE`.
 MD
-  printf '\nBaseline path: `%s`\n' "$BASELINE_PATH" >> benchmark/results/summary.md
-  COMPARE_EXIT=0
+    printf '\nBaseline path: `%s`\n' "$BASELINE_PATH" >> benchmark/results/summary.md
+    COMPARE_EXIT=0
+  fi
 fi
 
 echo "[bench] done"

@@ -138,6 +138,8 @@ jobs:
         if: needs.changes.outputs.docs_only != 'true'
         runs-on: ubuntu-latest
         timeout-minutes: 30
+        env:
+            CRABCLAW_BENCH_STRICT: '1'
         steps:
             - uses: actions/checkout@v4
             - uses: dtolnay/rust-toolchain@stable
@@ -208,6 +210,7 @@ jobs:
         runs-on: ubuntu-latest
         timeout-minutes: 30
         env:
+            CRABCLAW_BENCH_STRICT: '1'
             CRABCLAW_BENCH_MODE: real
             CRABCLAW_BENCH_BASELINE: benchmark/baseline.real.json
             CRABCLAW_BENCH_REAL_PROVIDER_URL: ${{ secrets.CRABCLAW_BENCH_REAL_PROVIDER_URL }}
