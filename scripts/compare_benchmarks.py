@@ -17,7 +17,9 @@ ABSOLUTE_FLOOR_MS = float(__import__('os').environ.get('CRABCLAW_BENCH_ABS_FLOOR
 
 # Hard upper bounds to protect key goals.
 HARD_LIMITS = {
+    'cold_start.p90_ms': 120.0,
     'cold_start.p95_ms': 120.0,
+    'provider.fast.p90_ms': 120.0,
     'ttft.p95_ms': 120.0,
     'memory.recall.p95_ms': 80.0,
 }
