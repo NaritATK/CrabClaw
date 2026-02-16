@@ -58,10 +58,14 @@ jobs:
           fi
           x86_64-linux-musl-gcc --version | head -n1
 
-      - name: Build release
+      - name: Build release (default)
+        if: "!contains(matrix.target, 'musl')"
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Build release (musl)
+        if: contains(matrix.target, 'musl')
         env:
           CC_x86_64_unknown_linux_musl: musl-gcc
-          TARGET_CC: musl-gcc
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
         run: cargo build --release --locked --target ${{ matrix.target }}
 
