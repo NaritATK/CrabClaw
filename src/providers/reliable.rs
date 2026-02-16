@@ -2,6 +2,7 @@ use super::traits::ChatMessage;
 use super::Provider;
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -57,7 +58,12 @@ pub struct ReliableProvider {
 
     cache_ttl_secs: u64,
     cache_max_entries: usize,
+    cache_context_fingerprint: String,
     response_cache: Mutex<HashMap<String, CacheEntry>>,
+
+    cb_open_count: AtomicU64,
+    cb_half_open_count: AtomicU64,
+    cb_close_count: AtomicU64,
 }
 
 impl ReliableProvider {
@@ -89,6 +95,15 @@ impl ReliableProvider {
             .filter(|v| *v > 0)
             .unwrap_or(256);
 
+        let provider_chain = providers
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        let tool_schema_hash = std::env::var("CRABCLAW_TOOL_SCHEMA_HASH").unwrap_or_default();
+        let cache_context_fingerprint =
+            format!("providers={provider_chain};tools={tool_schema_hash}");
+
         Self {
             providers,
             max_retries,
@@ -98,28 +113,37 @@ impl ReliableProvider {
             circuit_states: Mutex::new(HashMap::new()),
             cache_ttl_secs,
             cache_max_entries,
+            cache_context_fingerprint,
             response_cache: Mutex::new(HashMap::new()),
+            cb_open_count: AtomicU64::new(0),
+            cb_half_open_count: AtomicU64::new(0),
+            cb_close_count: AtomicU64::new(0),
         }
     }
 
     fn cache_key_chat(
+        &self,
         system_prompt: Option<&str>,
         message: &str,
         model: &str,
         temperature: f64,
     ) -> String {
         format!(
-            "chat|{}|{}|{}|{:.4}",
+            "chat|{}|{}|{}|{:.4}|{}",
             system_prompt.unwrap_or_default(),
             message,
             model,
-            temperature
+            temperature,
+            self.cache_context_fingerprint,
         )
     }
 
-    fn cache_key_history(messages: &[ChatMessage], model: &str, temperature: f64) -> String {
+    fn cache_key_history(&self, messages: &[ChatMessage], model: &str, temperature: f64) -> String {
         let messages_json = serde_json::to_string(messages).unwrap_or_default();
-        format!("history|{}|{}|{:.4}", messages_json, model, temperature)
+        format!(
+            "history|{}|{}|{:.4}|{}",
+            messages_json, model, temperature, self.cache_context_fingerprint,
+        )
     }
 
     fn cache_get(&self, key: &str) -> Option<String> {
@@ -171,6 +195,14 @@ impl ReliableProvider {
         }
     }
 
+    fn circuit_metrics_snapshot(&self) -> (u64, u64, u64) {
+        (
+            self.cb_open_count.load(Ordering::Relaxed),
+            self.cb_half_open_count.load(Ordering::Relaxed),
+            self.cb_close_count.load(Ordering::Relaxed),
+        )
+    }
+
     fn circuit_allows_call(&self, provider_name: &str) -> bool {
         let now = Instant::now();
         let mut states = self
@@ -186,8 +218,17 @@ impl ReliableProvider {
             if now < until {
                 return false;
             }
+            self.cb_half_open_count.fetch_add(1, Ordering::Relaxed);
             state.open_until = None;
             state.consecutive_failures = 0;
+            let (open_count, half_open_count, close_count) = self.circuit_metrics_snapshot();
+            tracing::info!(
+                provider = provider_name,
+                circuit_open_count = open_count,
+                circuit_half_open_count = half_open_count,
+                circuit_close_count = close_count,
+                "Circuit transitioned to half-open"
+            );
         }
         true
     }
@@ -200,8 +241,22 @@ impl ReliableProvider {
         let state = states
             .entry(provider_name.to_string())
             .or_insert_with(CircuitState::healthy);
+
+        let should_count_close = state.open_until.is_some() || state.consecutive_failures > 0;
         state.consecutive_failures = 0;
         state.open_until = None;
+
+        if should_count_close {
+            self.cb_close_count.fetch_add(1, Ordering::Relaxed);
+            let (open_count, half_open_count, close_count) = self.circuit_metrics_snapshot();
+            tracing::info!(
+                provider = provider_name,
+                circuit_open_count = open_count,
+                circuit_half_open_count = half_open_count,
+                circuit_close_count = close_count,
+                "Circuit closed after successful call"
+            );
+        }
     }
 
     fn circuit_record_failure(&self, provider_name: &str) {
@@ -215,8 +270,20 @@ impl ReliableProvider {
 
         state.consecutive_failures = state.consecutive_failures.saturating_add(1);
         if state.consecutive_failures >= self.circuit_breaker_failure_threshold {
+            let should_count_open = state.open_until.is_none_or(|until| Instant::now() >= until);
             state.open_until =
                 Some(Instant::now() + Duration::from_millis(self.circuit_breaker_cooldown_ms));
+            if should_count_open {
+                self.cb_open_count.fetch_add(1, Ordering::Relaxed);
+                let (open_count, half_open_count, close_count) = self.circuit_metrics_snapshot();
+                tracing::warn!(
+                    provider = provider_name,
+                    circuit_open_count = open_count,
+                    circuit_half_open_count = half_open_count,
+                    circuit_close_count = close_count,
+                    "Circuit opened due to repeated failures"
+                );
+            }
         }
     }
 }
@@ -240,7 +307,7 @@ impl Provider for ReliableProvider {
         model: &str,
         temperature: f64,
     ) -> anyhow::Result<String> {
-        let cache_key = Self::cache_key_chat(system_prompt, message, model, temperature);
+        let cache_key = self.cache_key_chat(system_prompt, message, model, temperature);
         if let Some(hit) = self.cache_get(&cache_key) {
             tracing::debug!("Provider response cache hit (chat_with_system)");
             return Ok(hit);
@@ -321,7 +388,7 @@ impl Provider for ReliableProvider {
         model: &str,
         temperature: f64,
     ) -> anyhow::Result<String> {
-        let cache_key = Self::cache_key_history(messages, model, temperature);
+        let cache_key = self.cache_key_history(messages, model, temperature);
         if let Some(hit) = self.cache_get(&cache_key) {
             tracing::debug!("Provider response cache hit (chat_with_history)");
             return Ok(hit);

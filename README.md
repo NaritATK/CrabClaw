@@ -33,6 +33,7 @@ Fast, small, and fully autonomous AI assistant infrastructure — deploy anywher
 - **Secure by design:** pairing, strict sandboxing, explicit allowlists, workspace scoping.
 - **Fully swappable:** core systems are traits (providers, channels, tools, memory, tunnels).
 - **No lock-in:** OpenAI-compatible provider support + pluggable custom endpoints.
+- **Provider reliability:** retry/backoff + circuit breaker + response cache for lower latency/cost under load.
 
 ## Benchmark Snapshot
 
