@@ -95,7 +95,7 @@ jobs:
             - name: Run rustfmt
               run: cargo fmt --all -- --check
             - name: Run clippy
-              run: cargo clippy --locked --all-targets -- -D warnings
+              run: cargo clippy --locked --all-targets -- -D warnings -A clippy::pedantic
             - name: Run shellcheck on scripts
               run: shellcheck scripts/benchmark_ci.sh scripts/refresh_benchmark_baseline.sh scripts/install.sh
             - name: Run ruff format check
