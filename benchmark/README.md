@@ -20,6 +20,7 @@ For each latency family, CrabClaw records **median, p90, p95** and keeps raw sam
   - `http.dns_ms`, `http.connect_ms`, `http.ttfb_ms` (real mode when provider URL is configured)
   - real/synthetic execution flags: `bench.real_provider_used`, `bench.real_channel_used`, `bench.real_tool_used`
   - `provider.retry_count`, `provider.timeout_rate`
+  - `provider.cache.hit_rate`, `provider.circuit.reject_rate` (must-have root-cause metrics)
   - `provider.coalesced_wait_count`, `provider.hedge_launch_count`, `provider.hedge_win_count`
   - `circuitbreaker.state` (0=closed, 1=open), `circuitbreaker.open_count`, `circuitbreaker.reject_count`, `circuitbreaker.half_open_count`, `circuitbreaker.close_count`
   - aliases: `cb.state`, `cb.open_count`, `cb.reject_count`

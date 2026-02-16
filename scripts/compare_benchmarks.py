@@ -12,6 +12,12 @@ MARGINS = {
     'cost.per_task_usd': 0.15,
 }
 
+# Must exist in benchmark output (strict mode) for debuggability.
+REQUIRED_PRESENCE_METRICS = {
+    'provider.cache.hit_rate',
+    'provider.circuit.reject_rate',
+}
+
 # Absolute floor (ms) for latency regressions to reduce flake/noise.
 ABSOLUTE_FLOOR_MS = float(
     __import__("os").environ.get("CRABCLAW_BENCH_ABS_FLOOR_MS", "5.0")
@@ -37,6 +43,8 @@ def fmt(v):
 
 
 def should_gate_metric(key: str) -> bool:
+    if key in REQUIRED_PRESENCE_METRICS:
+        return True
     if key == 'cost.per_task_usd':
         return True
     # CI gate uses median + p90; p95 is for reporting/visibility.
@@ -89,7 +97,10 @@ def main() -> int:
 
         status = 'OK'
         if should_gate_metric(key):
-            if key.endswith('_ms'):
+            if key in REQUIRED_PRESENCE_METRICS:
+                # Presence is mandatory; value trend is currently report-only.
+                pass
+            elif key.endswith('_ms'):
                 if cur_v > allowed and delta > ABSOLUTE_FLOOR_MS:
                     status = 'REGRESSION'
                     failed = True

@@ -677,6 +677,10 @@ async fn main() -> anyhow::Result<()> {
         reliability_stats.timeout_rate(),
     );
     metrics.insert(
+        "provider.circuit.reject_rate".to_string(),
+        reliability_stats.circuit_reject_rate(),
+    );
+    metrics.insert(
         "circuitbreaker.open_count".to_string(),
         reliability_stats.circuit_open_count as f64,
     );
@@ -711,6 +715,10 @@ async fn main() -> anyhow::Result<()> {
     );
     metrics.insert(
         "cache.response.hit_rate".to_string(),
+        reliability_stats.cache_hit_rate(),
+    );
+    metrics.insert(
+        "provider.cache.hit_rate".to_string(),
         reliability_stats.cache_hit_rate(),
     );
 

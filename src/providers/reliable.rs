@@ -80,6 +80,14 @@ impl ReliableProviderStats {
             self.cache_hits as f64 / self.cache_lookups as f64
         }
     }
+
+    pub fn circuit_reject_rate(&self) -> f64 {
+        if self.total_calls == 0 {
+            0.0
+        } else {
+            self.circuit_reject_count as f64 / self.total_calls as f64
+        }
+    }
 }
 
 /// Provider wrapper with retry + fallback + circuit-breaker + response-cache.
