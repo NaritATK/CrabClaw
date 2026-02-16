@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use tokio::sync::broadcast;
 
 /// Check if an error is non-retryable (client errors that won't resolve with retries).
 fn is_non_retryable(err: &anyhow::Error) -> bool {
@@ -53,6 +54,9 @@ pub struct ReliableProviderStats {
     pub timeout_count: u64,
     pub cache_hits: u64,
     pub cache_lookups: u64,
+    pub coalesced_wait_count: u64,
+    pub hedge_launch_count: u64,
+    pub hedge_win_count: u64,
     pub circuit_open_count: u64,
     pub circuit_half_open_count: u64,
     pub circuit_close_count: u64,
@@ -100,6 +104,13 @@ pub struct ReliableProvider {
     timeout_count: AtomicU64,
     cache_hits: AtomicU64,
     cache_lookups: AtomicU64,
+    coalesced_wait_count: AtomicU64,
+    hedge_launch_count: AtomicU64,
+    hedge_win_count: AtomicU64,
+
+    hedge_enabled: bool,
+    hedge_delay_ms: u64,
+    inflight: Mutex<HashMap<String, broadcast::Sender<Result<String, String>>>>,
 }
 
 impl ReliableProvider {
@@ -140,6 +151,15 @@ impl ReliableProvider {
         let cache_context_fingerprint =
             format!("providers={provider_chain};tools={tool_schema_hash}");
 
+        let hedge_enabled = std::env::var("CRABCLAW_PROVIDER_HEDGE_ENABLED")
+            .ok()
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+            .unwrap_or(false);
+        let hedge_delay_ms = std::env::var("CRABCLAW_PROVIDER_HEDGE_DELAY_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(120);
+
         Self {
             providers,
             max_retries,
@@ -159,6 +179,12 @@ impl ReliableProvider {
             timeout_count: AtomicU64::new(0),
             cache_hits: AtomicU64::new(0),
             cache_lookups: AtomicU64::new(0),
+            coalesced_wait_count: AtomicU64::new(0),
+            hedge_launch_count: AtomicU64::new(0),
+            hedge_win_count: AtomicU64::new(0),
+            hedge_enabled,
+            hedge_delay_ms,
+            inflight: Mutex::new(HashMap::new()),
         }
     }
 
@@ -169,6 +195,9 @@ impl ReliableProvider {
             timeout_count: self.timeout_count.load(Ordering::Relaxed),
             cache_hits: self.cache_hits.load(Ordering::Relaxed),
             cache_lookups: self.cache_lookups.load(Ordering::Relaxed),
+            coalesced_wait_count: self.coalesced_wait_count.load(Ordering::Relaxed),
+            hedge_launch_count: self.hedge_launch_count.load(Ordering::Relaxed),
+            hedge_win_count: self.hedge_win_count.load(Ordering::Relaxed),
             circuit_open_count: self.cb_open_count.load(Ordering::Relaxed),
             circuit_half_open_count: self.cb_half_open_count.load(Ordering::Relaxed),
             circuit_close_count: self.cb_close_count.load(Ordering::Relaxed),
@@ -181,6 +210,28 @@ impl ReliableProvider {
         }
         let msg = err.to_string().to_ascii_lowercase();
         msg.contains("timeout") || msg.contains("timed out")
+    }
+
+    fn inflight_subscribe_or_create(
+        &self,
+        key: &str,
+    ) -> (
+        bool,
+        broadcast::Sender<Result<String, String>>,
+        Option<broadcast::Receiver<Result<String, String>>>,
+    ) {
+        let mut inflight = self.inflight.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(sender) = inflight.get(key) {
+            return (false, sender.clone(), Some(sender.subscribe()));
+        }
+        let (sender, _rx) = broadcast::channel(16);
+        inflight.insert(key.to_string(), sender.clone());
+        (true, sender, None)
+    }
+
+    fn inflight_complete(&self, key: &str) {
+        let mut inflight = self.inflight.lock().unwrap_or_else(|e| e.into_inner());
+        inflight.remove(key);
     }
 
     fn cache_key_chat(
@@ -377,9 +428,20 @@ impl Provider for ReliableProvider {
             return Ok(hit);
         }
 
+        let (is_leader, tx, rx_opt) = self.inflight_subscribe_or_create(&cache_key);
+        if !is_leader {
+            self.coalesced_wait_count.fetch_add(1, Ordering::Relaxed);
+            if let Some(mut rx) = rx_opt {
+                if let Ok(Ok(shared)) = rx.recv().await {
+                    self.cache_put(cache_key.clone(), shared.clone());
+                    return Ok(shared);
+                }
+            }
+        }
+
         let mut failures = Vec::new();
 
-        for (provider_name, provider) in &self.providers {
+        for (idx, (provider_name, provider)) in self.providers.iter().enumerate() {
             if !self.circuit_allows_call(provider_name) {
                 failures.push(format!("{provider_name}: circuit open"));
                 tracing::warn!(
@@ -393,10 +455,40 @@ impl Provider for ReliableProvider {
 
             for attempt in 0..=self.max_retries {
                 self.total_calls.fetch_add(1, Ordering::Relaxed);
-                match provider
-                    .chat_with_system(system_prompt, message, model, temperature)
-                    .await
+
+                let call_result = if self.hedge_enabled
+                    && attempt == 0
+                    && idx + 1 < self.providers.len()
+                    && self.circuit_allows_call(&self.providers[idx + 1].0)
                 {
+                    let (hedge_name, hedge_provider) = &self.providers[idx + 1];
+                    self.hedge_launch_count.fetch_add(1, Ordering::Relaxed);
+                    let primary =
+                        provider.chat_with_system(system_prompt, message, model, temperature);
+                    let hedge = async {
+                        tokio::time::sleep(Duration::from_millis(self.hedge_delay_ms)).await;
+                        hedge_provider
+                            .chat_with_system(system_prompt, message, model, temperature)
+                            .await
+                    };
+                    tokio::pin!(primary);
+                    tokio::pin!(hedge);
+                    let (winner, res) = tokio::select! {
+                        res = &mut primary => (provider_name.as_str(), res),
+                        res = &mut hedge => (hedge_name.as_str(), res),
+                    };
+                    if winner == hedge_name {
+                        self.hedge_win_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                    tracing::debug!(primary_provider=%provider_name, hedge_provider=%hedge_name, winner=%winner, "hedged request resolved");
+                    res
+                } else {
+                    provider
+                        .chat_with_system(system_prompt, message, model, temperature)
+                        .await
+                };
+
+                match call_result {
                     Ok(resp) => {
                         self.circuit_record_success(provider_name);
                         if attempt > 0 {
@@ -407,6 +499,8 @@ impl Provider for ReliableProvider {
                             );
                         }
                         self.cache_put(cache_key.clone(), resp.clone());
+                        let _ = tx.send(Ok(resp.clone()));
+                        self.inflight_complete(&cache_key);
                         return Ok(resp);
                     }
                     Err(e) => {
@@ -448,7 +542,10 @@ impl Provider for ReliableProvider {
             tracing::warn!(provider = provider_name, "Switching to fallback provider");
         }
 
-        anyhow::bail!("All providers failed. Attempts:\n{}", failures.join("\n"))
+        let err_msg = format!("All providers failed. Attempts:\n{}", failures.join("\n"));
+        let _ = tx.send(Err(err_msg.clone()));
+        self.inflight_complete(&cache_key);
+        anyhow::bail!(err_msg)
     }
 
     async fn chat_with_history(
@@ -465,9 +562,20 @@ impl Provider for ReliableProvider {
             return Ok(hit);
         }
 
+        let (is_leader, tx, rx_opt) = self.inflight_subscribe_or_create(&cache_key);
+        if !is_leader {
+            self.coalesced_wait_count.fetch_add(1, Ordering::Relaxed);
+            if let Some(mut rx) = rx_opt {
+                if let Ok(Ok(shared)) = rx.recv().await {
+                    self.cache_put(cache_key.clone(), shared.clone());
+                    return Ok(shared);
+                }
+            }
+        }
+
         let mut failures = Vec::new();
 
-        for (provider_name, provider) in &self.providers {
+        for (idx, (provider_name, provider)) in self.providers.iter().enumerate() {
             if !self.circuit_allows_call(provider_name) {
                 failures.push(format!("{provider_name}: circuit open"));
                 tracing::warn!(
@@ -481,10 +589,39 @@ impl Provider for ReliableProvider {
 
             for attempt in 0..=self.max_retries {
                 self.total_calls.fetch_add(1, Ordering::Relaxed);
-                match provider
-                    .chat_with_history(messages, model, temperature)
-                    .await
+
+                let call_result = if self.hedge_enabled
+                    && attempt == 0
+                    && idx + 1 < self.providers.len()
+                    && self.circuit_allows_call(&self.providers[idx + 1].0)
                 {
+                    let (hedge_name, hedge_provider) = &self.providers[idx + 1];
+                    self.hedge_launch_count.fetch_add(1, Ordering::Relaxed);
+                    let primary = provider.chat_with_history(messages, model, temperature);
+                    let hedge = async {
+                        tokio::time::sleep(Duration::from_millis(self.hedge_delay_ms)).await;
+                        hedge_provider
+                            .chat_with_history(messages, model, temperature)
+                            .await
+                    };
+                    tokio::pin!(primary);
+                    tokio::pin!(hedge);
+                    let (winner, res) = tokio::select! {
+                        res = &mut primary => (provider_name.as_str(), res),
+                        res = &mut hedge => (hedge_name.as_str(), res),
+                    };
+                    if winner == hedge_name {
+                        self.hedge_win_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                    tracing::debug!(primary_provider=%provider_name, hedge_provider=%hedge_name, winner=%winner, "hedged request resolved");
+                    res
+                } else {
+                    provider
+                        .chat_with_history(messages, model, temperature)
+                        .await
+                };
+
+                match call_result {
                     Ok(resp) => {
                         self.circuit_record_success(provider_name);
                         if attempt > 0 {
@@ -495,6 +632,8 @@ impl Provider for ReliableProvider {
                             );
                         }
                         self.cache_put(cache_key.clone(), resp.clone());
+                        let _ = tx.send(Ok(resp.clone()));
+                        self.inflight_complete(&cache_key);
                         return Ok(resp);
                     }
                     Err(e) => {
@@ -536,7 +675,10 @@ impl Provider for ReliableProvider {
             tracing::warn!(provider = provider_name, "Switching to fallback provider");
         }
 
-        anyhow::bail!("All providers failed. Attempts:\n{}", failures.join("\n"))
+        let err_msg = format!("All providers failed. Attempts:\n{}", failures.join("\n"));
+        let _ = tx.send(Err(err_msg.clone()));
+        self.inflight_complete(&cache_key);
+        anyhow::bail!(err_msg)
     }
 }
 

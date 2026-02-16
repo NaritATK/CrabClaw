@@ -16,6 +16,7 @@ For each latency family, CrabClaw records **median, p90, p95** and keeps raw sam
 - observability diagnostics:
   - `http.dns_ms`, `http.connect_ms`, `http.ttfb_ms` (real mode when provider URL is configured)
   - `provider.retry_count`, `provider.timeout_rate`
+  - `provider.coalesced_wait_count`, `provider.hedge_launch_count`, `provider.hedge_win_count`
   - `circuitbreaker.open_count`, `circuitbreaker.half_open_count`, `circuitbreaker.close_count`
   - `cache.response.hit_rate`
 

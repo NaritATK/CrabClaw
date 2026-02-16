@@ -579,6 +579,18 @@ async fn main() -> anyhow::Result<()> {
         reliability_stats.retry_count as f64,
     );
     metrics.insert(
+        "provider.coalesced_wait_count".to_string(),
+        reliability_stats.coalesced_wait_count as f64,
+    );
+    metrics.insert(
+        "provider.hedge_launch_count".to_string(),
+        reliability_stats.hedge_launch_count as f64,
+    );
+    metrics.insert(
+        "provider.hedge_win_count".to_string(),
+        reliability_stats.hedge_win_count as f64,
+    );
+    metrics.insert(
         "provider.timeout_rate".to_string(),
         reliability_stats.timeout_rate(),
     );
