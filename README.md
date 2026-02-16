@@ -47,7 +47,11 @@ Local machine quick benchmark (macOS arm64, Feb 2026), including comparative ref
 | **Binary Size** | ~28MB (dist) | N/A (Scripts) | ~8MB | **3.4 MB** |
 | **Cost** | Mac Mini $599 | Linux SBC ~$50 | Linux Board $10 | **Any hardware $10** |
 
-> Notes: CrabClaw results measured with `/usr/bin/time -l` on release builds. OpenClaw requires Node.js runtime (~390MB overhead). PicoClaw and CrabClaw are static binaries.
+> **Notes**
+>
+> - CrabClaw results measured with `/usr/bin/time -l` on release builds.
+> - OpenClaw requires Node.js runtime (~390MB overhead).
+> - PicoClaw and CrabClaw are static binaries.
 
 <p align="center">
   <img src="crab-claw.jpeg" alt="CrabClaw vs OpenClaw Comparison" width="800" />
@@ -68,11 +72,12 @@ ls -lh target/release/crabclaw
 CrabClaw runs a benchmark gate on every PR to prevent performance/cost regressions.
 
 Measured metrics include:
-- cold start (`cold_start.p95_ms`)
-- time-to-first-token proxy (`ttft.p95_ms`)
-- provider/channel/tool p95 latency
-- memory recall p95 latency
-- synthetic cost-per-task (`cost.per_task_usd`)
+
+- cold start (`median`, `p90`, `p95`)
+- time-to-first-token proxy (`ttft.median_ms`, `ttft.p90_ms`, `ttft.p95_ms`)
+- provider/channel/tool latency (`median`, `p90`, `p95`)
+- memory recall latency + quality metrics
+- synthetic cost-per-task (`cost.per_task_usd`) + cost input breakdown
 
 ```bash
 bash scripts/benchmark_ci.sh
@@ -479,7 +484,10 @@ MIT — see [LICENSE](LICENSE)
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Implement a trait, submit a PR:
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Implement a trait and submit a PR:
+
 - CI workflow guide: [docs/ci-map.md](docs/ci-map.md)
 - New `Provider` → `src/providers/`
 - New `Channel` → `src/channels/`
