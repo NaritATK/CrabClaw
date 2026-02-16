@@ -22,8 +22,8 @@ services:
     environment:
       - API_KEY
       - PROVIDER
-      - ZEROCLAW_MODEL
-      - ZEROCLAW_GATEWAY_PORT=3000
+      - CRABCLAW_MODEL
+      - CRABCLAW_GATEWAY_PORT=3000
       - SANDBOX_HOST=crabclaw-sandbox
     volumes:
       # Mount single config file (avoids shadowing other files in .crabclaw)

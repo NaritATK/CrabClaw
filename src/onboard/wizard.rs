@@ -151,7 +151,7 @@ pub fn run_wizard() -> Result<Config> {
             );
             println!();
             // Signal to main.rs to call start_channels after wizard returns
-            std::env::set_var("ZEROCLAW_AUTOSTART_CHANNELS", "1");
+            std::env::set_var("CRABCLAW_AUTOSTART_CHANNELS", "1");
         }
     }
 
@@ -207,7 +207,7 @@ pub fn run_channels_repair_wizard() -> Result<Config> {
             );
             println!();
             // Signal to main.rs to call start_channels after wizard returns
-            std::env::set_var("ZEROCLAW_AUTOSTART_CHANNELS", "1");
+            std::env::set_var("CRABCLAW_AUTOSTART_CHANNELS", "1");
         }
     }
 
@@ -1700,7 +1700,7 @@ fn setup_channels() -> Result<ChannelsConfig> {
                     access_token: access_token.trim().to_string(),
                     phone_number_id: phone_number_id.trim().to_string(),
                     verify_token: verify_token.trim().to_string(),
-                    app_secret: None, // Can be set via ZEROCLAW_WHATSAPP_APP_SECRET env var
+                    app_secret: None, // Can be set via CRABCLAW_WHATSAPP_APP_SECRET env var
                     allowed_numbers,
                 });
             }

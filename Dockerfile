@@ -72,12 +72,12 @@ RUN chown 65534:65534 /crabclaw-data/.crabclaw/config.toml
 
 # Environment setup
 # Use consistent workspace path
-ENV ZEROCLAW_WORKSPACE=/crabclaw-data/workspace
+ENV CRABCLAW_WORKSPACE=/crabclaw-data/workspace
 ENV HOME=/crabclaw-data
 # Defaults for local dev (Ollama) - matches config.template.toml
 ENV PROVIDER="ollama"
-ENV ZEROCLAW_MODEL="llama3.2"
-ENV ZEROCLAW_GATEWAY_PORT=3000
+ENV CRABCLAW_MODEL="llama3.2"
+ENV CRABCLAW_GATEWAY_PORT=3000
 
 # Note: API_KEY is intentionally NOT set here to avoid confusion.
 # It is set in config.toml as the Ollama URL.
@@ -95,12 +95,12 @@ COPY --from=builder /app/target/release/crabclaw /usr/local/bin/crabclaw
 COPY --from=permissions /crabclaw-data /crabclaw-data
 
 # Environment setup
-ENV ZEROCLAW_WORKSPACE=/crabclaw-data/workspace
+ENV CRABCLAW_WORKSPACE=/crabclaw-data/workspace
 ENV HOME=/crabclaw-data
 # Defaults for prod (OpenRouter)
 ENV PROVIDER="openrouter"
-ENV ZEROCLAW_MODEL="anthropic/claude-sonnet-4-20250514"
-ENV ZEROCLAW_GATEWAY_PORT=3000
+ENV CRABCLAW_MODEL="anthropic/claude-sonnet-4-20250514"
+ENV CRABCLAW_GATEWAY_PORT=3000
 
 # API_KEY must be provided at runtime!
 

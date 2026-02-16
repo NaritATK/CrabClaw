@@ -19,14 +19,14 @@ services:
       # Required: Your LLM provider API key
       - API_KEY=${API_KEY:-}
       # Or use the prefixed version:
-      # - ZEROCLAW_API_KEY=${ZEROCLAW_API_KEY:-}
+      # - CRABCLAW_API_KEY=${CRABCLAW_API_KEY:-}
       
       # Optional: LLM provider (default: openrouter)
       # Options: openrouter, openai, anthropic, ollama
       - PROVIDER=${PROVIDER:-openrouter}
       
       # Optional: Model override
-      # - ZEROCLAW_MODEL=anthropic/claude-sonnet-4-20250514
+      # - CRABCLAW_MODEL=anthropic/claude-sonnet-4-20250514
       
     volumes:
       # Persist workspace and config
