@@ -38,13 +38,13 @@ Fast, small, and fully autonomous AI assistant infrastructure — deploy anywher
 
 Local machine quick benchmark (macOS arm64, Feb 2026), including comparative references for context.
 
-| | OpenClaw | NanoBot | PicoClaw | CrabClaw 🦀 |
+| Metric | OpenClaw | NanoBot | PicoClaw | CrabClaw 🦀 |
 |---|---|---|---|---|
 | **Language** | TypeScript | Python | Go | **Rust** |
 | **RAM** | > 1GB | > 100MB | < 10MB | **< 5MB** |
 | **Startup (0.8GHz core)** | > 500s | > 30s | < 1s | **< 10ms** |
-| **Binary Size** | ~28MB (dist) | N/A (Scripts) | ~8MB | **3.4 MB** |
-| **Cost** | Mac Mini $599 | Linux SBC ~$50 | Linux Board $10 | **Any hardware $10** |
+| **Binary Size** | ~28MB (dist) | N/A (scripts) | ~8MB | **3.4 MB** |
+| **Cost** | Mac Mini $599 | Linux SBC ~$50 | Linux board $10 | **Any hardware $10** |
 
 > **Notes**
 >
@@ -87,10 +87,14 @@ Details: `benchmark/README.md`
 
 ## Quick Start
 
+### Install
+
 ```bash
 # One-command installer (latest GitHub release binary)
 curl -fsSL https://raw.githubusercontent.com/NaritATK/CrabClaw/main/scripts/install.sh | bash
+```
 
+```bash
 # Or install from source
 git clone https://github.com/NaritATK/CrabClaw.git
 cd crabclaw
@@ -99,47 +103,59 @@ cargo install --path . --force
 
 # Once published on crates.io:
 # cargo install crabclaw
+```
 
+### Onboard
+
+```bash
 # Quick setup (no prompts)
 crabclaw onboard --api-key sk-... --provider openrouter
 
-# Or interactive wizard
+# Interactive wizard
 crabclaw onboard --interactive
 
-# Or quickly repair channels/allowlists only
+# Repair channels/allowlists only
 crabclaw onboard --channels-only
+```
 
-# Chat
+### Daily commands
+
+```bash
+# Single message
 crabclaw agent -m "Hello, CrabClaw!"
 
 # Interactive mode
 crabclaw agent
 
-# Start the gateway (webhook server)
-crabclaw gateway                # default: 127.0.0.1:8080
-crabclaw gateway --port 0       # random port (security hardened)
+# Start gateway (webhook server)
+crabclaw gateway
+crabclaw gateway --port 0
 
 # Start full autonomous runtime
 crabclaw daemon
+```
 
-# Check status
+### Diagnostics and operations
+
+```bash
+# Status and diagnostics
 crabclaw status
-
-# Run system diagnostics
 crabclaw doctor
 crabclaw diagnose
 crabclaw --diagnose
 
-# Check channel health
+# Channel health and integration info
 crabclaw channel doctor
-
-# Get integration setup details
 crabclaw integrations info Telegram
 
 # Manage background service
 crabclaw service install
 crabclaw service status
+```
 
+### Migration
+
+```bash
 # Migrate memory from OpenClaw (safe preview first)
 crabclaw migrate openclaw --dry-run
 crabclaw migrate openclaw
