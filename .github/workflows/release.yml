@@ -50,10 +50,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools
 
+      - name: Configure MUSL compiler aliases
+        if: contains(matrix.target, 'musl')
+        run: |
+          if ! command -v x86_64-linux-musl-gcc >/dev/null 2>&1; then
+            sudo ln -sf "$(command -v musl-gcc)" /usr/local/bin/x86_64-linux-musl-gcc
+          fi
+          x86_64-linux-musl-gcc --version | head -n1
+
       - name: Build release
         env:
-          CC_x86_64_unknown_linux_musl: ${{ contains(matrix.target, 'musl') && 'musl-gcc' || '' }}
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: ${{ contains(matrix.target, 'musl') && 'musl-gcc' || '' }}
+          CC_x86_64_unknown_linux_musl: musl-gcc
+          TARGET_CC: musl-gcc
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Check binary size (Unix)
