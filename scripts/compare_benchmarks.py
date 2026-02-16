@@ -13,7 +13,9 @@ MARGINS = {
 }
 
 # Absolute floor (ms) for latency regressions to reduce flake/noise.
-ABSOLUTE_FLOOR_MS = float(__import__('os').environ.get('CRABCLAW_BENCH_ABS_FLOOR_MS', '5.0'))
+ABSOLUTE_FLOOR_MS = float(
+    __import__("os").environ.get("CRABCLAW_BENCH_ABS_FLOOR_MS", "5.0")
+)
 
 # Hard upper bounds to protect key goals.
 HARD_LIMITS = {
@@ -50,7 +52,11 @@ def main() -> int:
     ap.add_argument('--baseline', required=True)
     ap.add_argument('--current', required=True)
     ap.add_argument('--summary-out')
-    ap.add_argument('--strict', action='store_true', help='Fail when a gated baseline metric is missing in current output')
+    ap.add_argument(
+        "--strict",
+        action="store_true",
+        help="Fail when a gated baseline metric is missing in current output",
+    )
     args = ap.parse_args()
 
     base = load_metrics(args.baseline)
@@ -96,7 +102,9 @@ def main() -> int:
             f"[bench] {key}: baseline={fmt(base_v)} current={fmt(cur_v)} "
             f"allowed<={fmt(allowed)} delta={fmt(delta)} => {status}"
         )
-        rows.append((key, base_v, cur_v, allowed, delta, status, should_gate_metric(key)))
+        rows.append(
+            (key, base_v, cur_v, allowed, delta, status, should_gate_metric(key))
+        )
 
     hard_fail_rows = []
     for key, limit in HARD_LIMITS.items():
