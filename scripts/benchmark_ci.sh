@@ -70,21 +70,26 @@ else
   esac
 fi
 
+COMPARE_EXIT=0
+
 if [ -f "$BASELINE_PATH" ]; then
-  "$PYTHON_BIN" scripts/compare_benchmarks.py \
+  if ! "$PYTHON_BIN" scripts/compare_benchmarks.py \
     --baseline "$BASELINE_PATH" \
     --current benchmark/results/latest.full.json \
-    --summary-out benchmark/results/summary.md
+    --summary-out benchmark/results/summary.md; then
+    COMPARE_EXIT=$?
+  fi
 else
   echo "[bench] baseline not found at $BASELINE_PATH; skipping regression gate"
-  cat > benchmark/results/summary.md <<EOF
+  cat > benchmark/results/summary.md <<'MD'
 ## ⚠️ Benchmark baseline not found
 
-Baseline path: `$BASELINE_PATH`
-
+Regression comparison was skipped for this run because no baseline file was found.
 Set baseline via env var `CRABCLAW_BENCH_BASELINE`.
-Regression comparison was skipped for this run.
-EOF
+MD
+  printf '\nBaseline path: `%s`\n' "$BASELINE_PATH" >> benchmark/results/summary.md
+  COMPARE_EXIT=0
 fi
 
 echo "[bench] done"
+exit "$COMPARE_EXIT"
