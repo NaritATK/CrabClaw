@@ -58,6 +58,8 @@ pub struct ReliableProviderStats {
     pub hedge_launch_count: u64,
     pub hedge_win_count: u64,
     pub circuit_open_count: u64,
+    pub circuit_reject_count: u64,
+    pub circuit_state: u64,
     pub circuit_half_open_count: u64,
     pub circuit_close_count: u64,
 }
@@ -96,6 +98,7 @@ pub struct ReliableProvider {
     response_cache: Mutex<HashMap<String, CacheEntry>>,
 
     cb_open_count: AtomicU64,
+    cb_reject_count: AtomicU64,
     cb_half_open_count: AtomicU64,
     cb_close_count: AtomicU64,
 
@@ -182,6 +185,7 @@ impl ReliableProvider {
             cache_context_fingerprint,
             response_cache: Mutex::new(HashMap::new()),
             cb_open_count: AtomicU64::new(0),
+            cb_reject_count: AtomicU64::new(0),
             cb_half_open_count: AtomicU64::new(0),
             cb_close_count: AtomicU64::new(0),
             total_calls: AtomicU64::new(0),
@@ -199,6 +203,14 @@ impl ReliableProvider {
     }
 
     pub fn stats_snapshot(&self) -> ReliableProviderStats {
+        let now = Instant::now();
+        let has_open_circuit = self
+            .circuit_states
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .any(|s| s.open_until.is_some_and(|until| now < until));
+
         ReliableProviderStats {
             total_calls: self.total_calls.load(Ordering::Relaxed),
             retry_count: self.retry_count.load(Ordering::Relaxed),
@@ -209,6 +221,8 @@ impl ReliableProvider {
             hedge_launch_count: self.hedge_launch_count.load(Ordering::Relaxed),
             hedge_win_count: self.hedge_win_count.load(Ordering::Relaxed),
             circuit_open_count: self.cb_open_count.load(Ordering::Relaxed),
+            circuit_reject_count: self.cb_reject_count.load(Ordering::Relaxed),
+            circuit_state: if has_open_circuit { 1 } else { 0 },
             circuit_half_open_count: self.cb_half_open_count.load(Ordering::Relaxed),
             circuit_close_count: self.cb_close_count.load(Ordering::Relaxed),
         }
@@ -453,9 +467,11 @@ impl Provider for ReliableProvider {
 
         for (idx, (provider_name, provider)) in self.providers.iter().enumerate() {
             if !self.circuit_allows_call(provider_name) {
+                let reject_count = self.cb_reject_count.fetch_add(1, Ordering::Relaxed) + 1;
                 failures.push(format!("{provider_name}: circuit open"));
                 tracing::warn!(
                     provider = provider_name,
+                    circuit_reject_count = reject_count,
                     "Skipping provider due to open circuit breaker"
                 );
                 continue;
@@ -587,9 +603,11 @@ impl Provider for ReliableProvider {
 
         for (idx, (provider_name, provider)) in self.providers.iter().enumerate() {
             if !self.circuit_allows_call(provider_name) {
+                let reject_count = self.cb_reject_count.fetch_add(1, Ordering::Relaxed) + 1;
                 failures.push(format!("{provider_name}: circuit open"));
                 tracing::warn!(
                     provider = provider_name,
+                    circuit_reject_count = reject_count,
                     "Skipping provider due to open circuit breaker"
                 );
                 continue;

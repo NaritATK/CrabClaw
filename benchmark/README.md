@@ -21,7 +21,8 @@ For each latency family, CrabClaw records **median, p90, p95** and keeps raw sam
   - real/synthetic execution flags: `bench.real_provider_used`, `bench.real_channel_used`, `bench.real_tool_used`
   - `provider.retry_count`, `provider.timeout_rate`
   - `provider.coalesced_wait_count`, `provider.hedge_launch_count`, `provider.hedge_win_count`
-  - `circuitbreaker.open_count`, `circuitbreaker.half_open_count`, `circuitbreaker.close_count`
+  - `circuitbreaker.state` (0=closed, 1=open), `circuitbreaker.open_count`, `circuitbreaker.reject_count`, `circuitbreaker.half_open_count`, `circuitbreaker.close_count`
+  - aliases: `cb.state`, `cb.open_count`, `cb.reject_count`
   - `cache.response.hit_rate`
 
 ## Run locally

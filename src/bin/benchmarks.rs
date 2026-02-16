@@ -681,12 +681,33 @@ async fn main() -> anyhow::Result<()> {
         reliability_stats.circuit_open_count as f64,
     );
     metrics.insert(
+        "circuitbreaker.reject_count".to_string(),
+        reliability_stats.circuit_reject_count as f64,
+    );
+    metrics.insert(
+        "circuitbreaker.state".to_string(),
+        reliability_stats.circuit_state as f64,
+    );
+    metrics.insert(
         "circuitbreaker.half_open_count".to_string(),
         reliability_stats.circuit_half_open_count as f64,
     );
     metrics.insert(
         "circuitbreaker.close_count".to_string(),
         reliability_stats.circuit_close_count as f64,
+    );
+    // Short aliases for dashboards.
+    metrics.insert(
+        "cb.open_count".to_string(),
+        reliability_stats.circuit_open_count as f64,
+    );
+    metrics.insert(
+        "cb.reject_count".to_string(),
+        reliability_stats.circuit_reject_count as f64,
+    );
+    metrics.insert(
+        "cb.state".to_string(),
+        reliability_stats.circuit_state as f64,
     );
     metrics.insert(
         "cache.response.hit_rate".to_string(),
