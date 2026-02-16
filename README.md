@@ -5,8 +5,8 @@
 <h1 align="center">CrabClaw 🦀</h1>
 
 <p align="center">
-  <strong>Zero overhead. Zero compromise. 100% Rust. 100% Agnostic.</strong><br>
-  ⚡️ <strong>Runs on $10 hardware with <5MB RAM: That's 99% less memory than OpenClaw and 98% cheaper than a Mac mini!</strong>
+  <strong>CrabClaw: personal agentic AI, production-minded, and fully Rust.</strong><br>
+  ⚡️ <strong>Small footprint, fast startup, and built for personal use on Mac/Windows/Linux.</strong>
 </p>
 
 <p align="center">
@@ -22,10 +22,10 @@ Fast, small, and fully autonomous AI assistant infrastructure — deploy anywher
 
 ### ✨ Features
 
-- 🏎️ **Ultra-Lightweight:** <5MB Memory footprint — 99% smaller than OpenClaw core.
-- 💰 **Minimal Cost:** Efficient enough to run on $10 Hardware — 98% cheaper than a Mac mini.
-- ⚡ **Lightning Fast:** 400X Faster startup time, boot in <10ms (under 1s even on 0.6GHz cores).
-- 🌍 **True Portability:** Single self-contained binary across ARM, x86, and RISC-V.
+- 🏎️ **Ultra-Lightweight:** optimized footprint for local/personal deployments.
+- 💰 **Minimal Cost:** efficient enough to run on low-cost hardware.
+- ⚡ **Lightning Fast:** fast startup and responsive runtime.
+- 🌍 **True Portability:** single self-contained binary across ARM, x86, and RISC-V.
 
 ### Why teams pick CrabClaw
 
@@ -34,9 +34,9 @@ Fast, small, and fully autonomous AI assistant infrastructure — deploy anywher
 - **Fully swappable:** core systems are traits (providers, channels, tools, memory, tunnels).
 - **No lock-in:** OpenAI-compatible provider support + pluggable custom endpoints.
 
-## Benchmark Snapshot (CrabClaw vs OpenClaw)
+## Benchmark Snapshot
 
-Local machine quick benchmark (macOS arm64, Feb 2026) normalized for 0.8GHz edge hardware.
+Local machine quick benchmark (macOS arm64, Feb 2026), including comparative references for context.
 
 | | OpenClaw | NanoBot | PicoClaw | CrabClaw 🦀 |
 |---|---|---|---|---|
