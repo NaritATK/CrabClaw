@@ -206,7 +206,7 @@ jobs:
     benchmark-real:
         name: Real Provider/Channel/Tool Benchmarks (optional)
         needs: [changes, build]
-        if: needs.changes.outputs.docs_only != 'true' && secrets.CRABCLAW_BENCH_REAL_PROVIDER_URL != ''
+        if: needs.changes.outputs.docs_only != 'true'
         runs-on: ubuntu-latest
         timeout-minutes: 30
         env:
@@ -224,7 +224,19 @@ jobs:
               with:
                   toolchain: 1.92
             - uses: Swatinem/rust-cache@v2
+            - name: Check real benchmark prerequisites
+              id: real_bench
+              shell: bash
+              run: |
+                  if [ -n "${CRABCLAW_BENCH_REAL_PROVIDER_URL:-}" ]; then
+                    echo "enabled=true" >> "$GITHUB_OUTPUT"
+                    echo "Real benchmark prerequisites present."
+                  else
+                    echo "enabled=false" >> "$GITHUB_OUTPUT"
+                    echo "Real benchmark secrets missing; skipping optional real benchmark run."
+                  fi
             - name: Run optional real benchmark suite
+              if: steps.real_bench.outputs.enabled == 'true'
               run: bash scripts/benchmark_ci.sh
             - name: Append real benchmark summary to job summary
               if: always()
@@ -235,7 +247,7 @@ jobs:
                     echo "## ⚠️ Real benchmark summary unavailable" >> "$GITHUB_STEP_SUMMARY"
                   fi
             - name: Upload real benchmark artifacts
-              if: always()
+              if: always() && steps.real_bench.outputs.enabled == 'true'
               uses: actions/upload-artifact@v4
               with:
                   name: benchmark-results-real
