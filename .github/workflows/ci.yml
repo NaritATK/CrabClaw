@@ -162,7 +162,7 @@ jobs:
               with:
                   script: |
                       const fs = require('fs');
-                      const marker = '<!-- crabclaw-benchmark-summary -->';
+                      const marker = '<!-- crabclaw-bench-summary -->';
                       const path = 'benchmark/results/summary.md';
                       let body = `${marker}\n## ⚠️ Benchmark summary unavailable`;
                       if (fs.existsSync(path)) {
