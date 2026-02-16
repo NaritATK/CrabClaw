@@ -1,0 +1,66 @@
+name: Benchmark Baseline Refresh
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Benchmark mode"
+        required: true
+        default: synthetic
+        type: choice
+        options:
+          - synthetic
+          - real
+      create_pr:
+        description: "Create PR with baseline update"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+      CRABCLAW_BENCH_MODE: ${{ github.event.inputs.mode == 'real' && 'real' || 'synthetic' }}
+      CRABCLAW_BENCH_BASELINE: ${{ github.event.inputs.mode == 'real' && 'benchmark/baseline.real.json' || 'benchmark/baseline.json' }}
+      CRABCLAW_BENCH_REAL_PROVIDER_URL: ${{ secrets.CRABCLAW_BENCH_REAL_PROVIDER_URL }}
+      CRABCLAW_BENCH_REAL_PROVIDER_API_KEY: ${{ secrets.CRABCLAW_BENCH_REAL_PROVIDER_API_KEY }}
+      CRABCLAW_BENCH_REAL_PROVIDER_MODEL: ${{ secrets.CRABCLAW_BENCH_REAL_PROVIDER_MODEL }}
+      CRABCLAW_BENCH_REAL_CHANNEL_WEBHOOK_URL: ${{ secrets.CRABCLAW_BENCH_REAL_CHANNEL_WEBHOOK_URL }}
+      CRABCLAW_BENCH_REAL_TOOL_COMMAND: ${{ secrets.CRABCLAW_BENCH_REAL_TOOL_COMMAND }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.92
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run benchmark and refresh baseline
+        run: bash scripts/refresh_benchmark_baseline.sh "${{ github.event.inputs.mode }}"
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-refresh-${{ github.event.inputs.mode }}
+          path: benchmark/results/
+
+      - name: Create Pull Request
+        if: ${{ github.event.inputs.create_pr == 'true' }}
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore(bench): refresh ${{ github.event.inputs.mode }} benchmark baseline"
+          title: "chore(bench): refresh ${{ github.event.inputs.mode }} benchmark baseline"
+          body: |
+            Automated benchmark baseline refresh.
+
+            - mode: `${{ github.event.inputs.mode }}`
+            - baseline: `${{ env.CRABCLAW_BENCH_BASELINE }}`
+
+            Please review metrics drift before merge.
+          branch: chore/refresh-benchmark-${{ github.event.inputs.mode }}
+          delete-branch: true

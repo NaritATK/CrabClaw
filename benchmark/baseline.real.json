@@ -1,0 +1,21 @@
+{
+  "metadata": {
+    "timestamp_utc": "1970-01-01T00:00:00Z",
+    "iterations": 60,
+    "note": "Template real-mode baseline. Refresh via workflow_dispatch after configuring benchmark secrets."
+  },
+  "metrics": {
+    "bench.mode.real": 1.0,
+    "channel.send.p95_ms": 0.0,
+    "cold_start.avg_ms": 0.0,
+    "cold_start.p95_ms": 0.0,
+    "cost.per_task_usd": 0.0,
+    "memory.recall.avg_ms": 0.0,
+    "memory.recall.p95_ms": 0.0,
+    "provider.fast.p95_ms": 0.0,
+    "provider.normal.p95_ms": 0.0,
+    "tool.exec.p95_ms": 0.0,
+    "ttft.p95_ms": 0.0,
+    "samples": 20
+  }
+}

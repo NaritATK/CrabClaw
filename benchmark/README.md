@@ -53,4 +53,11 @@ If baseline file does not exist, the script still produces results + summary and
 - `CRABCLAW_BENCH_REAL_CHANNEL_WEBHOOK_URL` (optional)
 - `CRABCLAW_BENCH_REAL_TOOL_COMMAND` (optional)
 
+### Refresh baseline automation
+
+- Local helper: `scripts/refresh_benchmark_baseline.sh [synthetic|real]`
+- GitHub Actions: run workflow **Benchmark Baseline Refresh** (`workflow_dispatch`)
+  - supports `mode=synthetic|real`
+  - can auto-open a PR with updated baseline file
+
 Then commit baseline update with an explanation in PR notes.
