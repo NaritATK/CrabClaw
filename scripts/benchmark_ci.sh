@@ -93,7 +93,8 @@ if [ -f "$BASELINE_PATH" ]; then
   if ! "$PYTHON_BIN" scripts/compare_benchmarks.py \
     --baseline "$BASELINE_PATH" \
     --current benchmark/results/latest.full.json \
-    --summary-out benchmark/results/summary.md; then
+    --summary-out benchmark/results/summary.md \
+    --strict; then
     COMPARE_EXIT=$?
   fi
 else

@@ -48,6 +48,7 @@ def main() -> int:
     ap.add_argument('--baseline', required=True)
     ap.add_argument('--current', required=True)
     ap.add_argument('--summary-out')
+    ap.add_argument('--strict', action='store_true', help='Fail when a gated baseline metric is missing in current output')
     args = ap.parse_args()
 
     base = load_metrics(args.baseline)
@@ -55,13 +56,20 @@ def main() -> int:
 
     failed = False
     rows = []
+    missing_gated_metrics = []
 
     print('[bench] comparing current against baseline')
     for key, base_v in sorted(base.items()):
         if key == 'samples':
             continue
         if key not in cur:
-            print(f"[bench][WARN] missing metric in current report: {key}")
+            gated = should_gate_metric(key)
+            level = 'ERROR' if (args.strict and gated) else 'WARN'
+            print(f"[bench][{level}] missing metric in current report: {key}")
+            rows.append((key, base_v, None, None, None, 'MISSING', gated))
+            if args.strict and gated:
+                failed = True
+                missing_gated_metrics.append(key)
             continue
         cur_v = cur[key]
         if not isinstance(base_v, (int, float)) or not isinstance(cur_v, (int, float)):
@@ -113,6 +121,11 @@ def main() -> int:
             lines.append(
                 f"| `{key}` | {fmt(base_v)} | {fmt(cur_v)} | <= {fmt(allowed)} | {fmt(delta)} | {gate_cell} | {status_cell} |"
             )
+
+        if missing_gated_metrics:
+            lines.extend(['', '### Missing Gated Metrics (strict mode)'])
+            for key in missing_gated_metrics:
+                lines.append(f"- `{key}` missing in current benchmark output")
 
         if hard_fail_rows:
             lines.extend(['', '### Hard Limit Violations'])
