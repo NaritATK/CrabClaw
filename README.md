@@ -62,6 +62,24 @@ ls -lh target/release/crabclaw
 /usr/bin/time -l target/release/crabclaw status
 ```
 
+### Performance/Cost Regression Gate (CI)
+
+CrabClaw runs a benchmark gate on every PR to prevent performance/cost regressions.
+
+Measured metrics include:
+- cold start (`cold_start.p95_ms`)
+- time-to-first-token proxy (`ttft.p95_ms`)
+- provider/channel/tool p95 latency
+- memory recall p95 latency
+- synthetic cost-per-task (`cost.per_task_usd`)
+
+```bash
+bash scripts/benchmark_ci.sh
+```
+
+Baseline: `benchmark/baseline.json`  
+Details: `benchmark/README.md`
+
 ## Quick Start
 
 ```bash

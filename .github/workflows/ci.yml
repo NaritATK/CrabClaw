@@ -120,6 +120,26 @@ jobs:
             - name: Build release binary
               run: cargo build --release --locked --verbose
 
+    benchmark:
+        name: Performance & Cost Benchmarks
+        needs: [changes, build]
+        if: needs.changes.outputs.docs_only != 'true'
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+              with:
+                  toolchain: 1.92
+            - uses: Swatinem/rust-cache@v2
+            - name: Run benchmark gate
+              run: bash scripts/benchmark_ci.sh
+            - name: Upload benchmark artifacts
+              uses: actions/upload-artifact@v4
+              with:
+                  name: benchmark-results
+                  path: benchmark/results/
+
     docs-only:
         name: Docs-Only Fast Path
         needs: [changes]
@@ -132,7 +152,7 @@ jobs:
     ci-required:
         name: CI Required Gate
         if: always()
-        needs: [changes, lint, test, build, docs-only]
+        needs: [changes, lint, test, build, benchmark, docs-only]
         runs-on: ubuntu-latest
         steps:
             - name: Enforce required status
@@ -148,12 +168,14 @@ jobs:
                   lint_result="${{ needs.lint.result }}"
                   test_result="${{ needs.test.result }}"
                   build_result="${{ needs.build.result }}"
+                  benchmark_result="${{ needs.benchmark.result }}"
 
                   echo "lint=${lint_result}"
                   echo "test=${test_result}"
                   echo "build=${build_result}"
+                  echo "benchmark=${benchmark_result}"
 
-                  if [ "$lint_result" != "success" ] || [ "$test_result" != "success" ] || [ "$build_result" != "success" ]; then
+                  if [ "$lint_result" != "success" ] || [ "$test_result" != "success" ] || [ "$build_result" != "success" ] || [ "$benchmark_result" != "success" ]; then
                     echo "Required CI jobs did not pass."
                     exit 1
                   fi

@@ -1797,8 +1797,14 @@ default_temperature = 0.7
 
     // ── Environment variable overrides (Docker support) ─────────
 
+    fn env_test_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
     #[test]
     fn env_override_api_key() {
+        let _guard = env_test_lock().lock().expect("env test lock poisoned");
         let mut config = Config::default();
         assert!(config.api_key.is_none());
 
@@ -1811,6 +1817,7 @@ default_temperature = 0.7
 
     #[test]
     fn env_override_api_key_fallback() {
+        let _guard = env_test_lock().lock().expect("env test lock poisoned");
         let mut config = Config::default();
 
         std::env::remove_var("CRABCLAW_API_KEY");
@@ -1823,6 +1830,7 @@ default_temperature = 0.7
 
     #[test]
     fn env_override_provider() {
+        let _guard = env_test_lock().lock().expect("env test lock poisoned");
         let mut config = Config::default();
 
         std::env::set_var("CRABCLAW_PROVIDER", "anthropic");
@@ -1834,6 +1842,7 @@ default_temperature = 0.7
 
     #[test]
     fn env_override_provider_fallback() {
+        let _guard = env_test_lock().lock().expect("env test lock poisoned");
         let mut config = Config::default();
 
         std::env::remove_var("CRABCLAW_PROVIDER");
@@ -1846,6 +1855,7 @@ default_temperature = 0.7
 
     #[test]
     fn env_override_model() {
+        let _guard = env_test_lock().lock().expect("env test lock poisoned");
         let mut config = Config::default();
 
         std::env::set_var("CRABCLAW_MODEL", "gpt-4o");
@@ -1857,6 +1867,7 @@ default_temperature = 0.7
 
     #[test]
     fn env_override_workspace() {
+        let _guard = env_test_lock().lock().expect("env test lock poisoned");
         let mut config = Config::default();
 
         std::env::set_var("CRABCLAW_WORKSPACE", "/custom/workspace");
@@ -1868,6 +1879,7 @@ default_temperature = 0.7
 
     #[test]
     fn env_override_empty_values_ignored() {
+        let _guard = env_test_lock().lock().expect("env test lock poisoned");
         let mut config = Config::default();
         let original_provider = config.default_provider.clone();
 
@@ -1880,6 +1892,7 @@ default_temperature = 0.7
 
     #[test]
     fn env_override_gateway_port() {
+        let _guard = env_test_lock().lock().expect("env test lock poisoned");
         let mut config = Config::default();
         assert_eq!(config.gateway.port, 3000);
 
@@ -1892,6 +1905,7 @@ default_temperature = 0.7
 
     #[test]
     fn env_override_port_fallback() {
+        let _guard = env_test_lock().lock().expect("env test lock poisoned");
         let mut config = Config::default();
 
         std::env::remove_var("CRABCLAW_GATEWAY_PORT");
@@ -1904,6 +1918,7 @@ default_temperature = 0.7
 
     #[test]
     fn env_override_gateway_host() {
+        let _guard = env_test_lock().lock().expect("env test lock poisoned");
         let mut config = Config::default();
         assert_eq!(config.gateway.host, "127.0.0.1");
 
@@ -1916,6 +1931,7 @@ default_temperature = 0.7
 
     #[test]
     fn env_override_host_fallback() {
+        let _guard = env_test_lock().lock().expect("env test lock poisoned");
         let mut config = Config::default();
 
         std::env::remove_var("CRABCLAW_GATEWAY_HOST");
@@ -1928,6 +1944,7 @@ default_temperature = 0.7
 
     #[test]
     fn env_override_temperature() {
+        let _guard = env_test_lock().lock().expect("env test lock poisoned");
         let mut config = Config::default();
 
         std::env::set_var("CRABCLAW_TEMPERATURE", "0.5");
@@ -1939,6 +1956,7 @@ default_temperature = 0.7
 
     #[test]
     fn env_override_temperature_out_of_range_ignored() {
+        let _guard = env_test_lock().lock().expect("env test lock poisoned");
         // Clean up any leftover env vars from other tests
         std::env::remove_var("CRABCLAW_TEMPERATURE");
 
@@ -1958,6 +1976,7 @@ default_temperature = 0.7
 
     #[test]
     fn env_override_invalid_port_ignored() {
+        let _guard = env_test_lock().lock().expect("env test lock poisoned");
         let mut config = Config::default();
         let original_port = config.gateway.port;
 
