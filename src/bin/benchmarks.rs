@@ -24,6 +24,21 @@ struct BenchmarkMetadata {
     note: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum BenchMode {
+    Synthetic,
+    Real,
+}
+
+impl BenchMode {
+    fn from_env() -> Self {
+        match std::env::var("CRABCLAW_BENCH_MODE") {
+            Ok(v) if v.eq_ignore_ascii_case("real") => Self::Real,
+            _ => Self::Synthetic,
+        }
+    }
+}
+
 struct SleepProvider {
     delay: Duration,
 }
@@ -42,6 +57,61 @@ impl Provider for SleepProvider {
     }
 }
 
+struct RealProvider {
+    client: reqwest::Client,
+    base_url: String,
+    api_key: String,
+    model: String,
+}
+
+#[async_trait]
+impl Provider for RealProvider {
+    async fn chat_with_system(
+        &self,
+        system_prompt: Option<&str>,
+        message: &str,
+        _model: &str,
+        _temperature: f64,
+    ) -> anyhow::Result<String> {
+        let mut messages = vec![];
+        if let Some(sys) = system_prompt {
+            messages.push(serde_json::json!({"role":"system","content":sys}));
+        }
+        messages.push(serde_json::json!({"role":"user","content":message}));
+
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+        let body = serde_json::json!({
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.0,
+            "max_tokens": 16
+        });
+
+        let res = self
+            .client
+            .post(url)
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+            anyhow::bail!("real provider call failed: {}", res.status());
+        }
+
+        let v: serde_json::Value = res.json().await?;
+        let text = v
+            .get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("content"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        Ok(text)
+    }
+}
+
 struct SleepChannel {
     delay: Duration,
 }
@@ -54,6 +124,40 @@ impl Channel for SleepChannel {
 
     async fn send(&self, _message: &str, _recipient: &str) -> anyhow::Result<()> {
         tokio::time::sleep(self.delay).await;
+        Ok(())
+    }
+
+    async fn listen(&self, _tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+struct RealWebhookChannel {
+    client: reqwest::Client,
+    webhook_url: String,
+}
+
+#[async_trait]
+impl Channel for RealWebhookChannel {
+    fn name(&self) -> &str {
+        "real-webhook-channel"
+    }
+
+    async fn send(&self, message: &str, recipient: &str) -> anyhow::Result<()> {
+        let body = serde_json::json!({
+            "recipient": recipient,
+            "message": message,
+            "source": "crabclaw-benchmark"
+        });
+        let res = self
+            .client
+            .post(&self.webhook_url)
+            .json(&body)
+            .send()
+            .await?;
+        if !res.status().is_success() {
+            anyhow::bail!("real webhook send failed: {}", res.status());
+        }
         Ok(())
     }
 
@@ -90,6 +194,44 @@ impl Tool for SleepTool {
     }
 }
 
+struct RealCommandTool {
+    command: String,
+}
+
+#[async_trait]
+impl Tool for RealCommandTool {
+    fn name(&self) -> &str {
+        "real-command-tool"
+    }
+
+    fn description(&self) -> &str {
+        "Runs a real command for benchmark timing"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    async fn execute(&self, _args: serde_json::Value) -> anyhow::Result<ToolResult> {
+        let out = tokio::process::Command::new("bash")
+            .arg("-lc")
+            .arg(&self.command)
+            .output()
+            .await
+            .context("run real benchmark tool command")?;
+
+        Ok(ToolResult {
+            success: out.status.success(),
+            output: String::from_utf8_lossy(&out.stdout).to_string(),
+            error: if out.status.success() {
+                None
+            } else {
+                Some(String::from_utf8_lossy(&out.stderr).to_string())
+            },
+        })
+    }
+}
+
 fn percentile_ms(samples: &[f64], p: f64) -> f64 {
     if samples.is_empty() {
         return 0.0;
@@ -105,6 +247,21 @@ fn average(samples: &[f64]) -> f64 {
         return 0.0;
     }
     samples.iter().sum::<f64>() / samples.len() as f64
+}
+
+fn env_usize(key: &str, default: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(default)
+}
+
+fn env_f64(key: &str, default: f64) -> f64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(default)
 }
 
 async fn bench_provider(provider: &dyn Provider, iterations: usize) -> anyhow::Result<Vec<f64>> {
@@ -168,13 +325,11 @@ async fn bench_memory_recall(iterations: usize) -> anyhow::Result<Vec<f64>> {
 }
 
 fn benchmark_cost_per_task_usd() -> f64 {
-    // Synthetic but stable: estimate cost for a representative task profile.
-    // 1 task = 1,200 input tokens + 500 output tokens.
-    // Default reference rates (USD per 1M tokens): input=5.0, output=15.0.
-    let input_tokens = 1200.0;
-    let output_tokens = 500.0;
-    let input_rate_per_million = 5.0;
-    let output_rate_per_million = 15.0;
+    // Override-capable synthetic cost model.
+    let input_tokens = env_f64("CRABCLAW_BENCH_INPUT_TOKENS", 1200.0);
+    let output_tokens = env_f64("CRABCLAW_BENCH_OUTPUT_TOKENS", 500.0);
+    let input_rate_per_million = env_f64("CRABCLAW_BENCH_INPUT_RATE_PER_M", 5.0);
+    let output_rate_per_million = env_f64("CRABCLAW_BENCH_OUTPUT_RATE_PER_M", 15.0);
 
     (input_tokens / 1_000_000.0) * input_rate_per_million
         + (output_tokens / 1_000_000.0) * output_rate_per_million
@@ -196,31 +351,100 @@ fn parse_output_path() -> PathBuf {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let output_path = parse_output_path();
-    let iterations = 60usize;
+    let iterations = env_usize("CRABCLAW_BENCH_ITERATIONS", 60);
+    let mode = BenchMode::from_env();
 
-    let fast_provider = SleepProvider {
-        delay: Duration::from_millis(14),
-    };
-    let normal_provider = SleepProvider {
-        delay: Duration::from_millis(32),
-    };
+    let mut note_parts: Vec<String> = vec![];
 
-    let provider_fast = bench_provider(&fast_provider, iterations).await?;
-    let provider_normal = bench_provider(&normal_provider, iterations).await?;
+    let provider_fast: Vec<f64>;
+    let provider_normal: Vec<f64>;
+    let channel_lat: Vec<f64>;
+    let tool_lat: Vec<f64>;
 
-    let channel = SleepChannel {
-        delay: Duration::from_millis(18),
-    };
-    let channel_lat = bench_channel(&channel, iterations).await?;
+    match mode {
+        BenchMode::Synthetic => {
+            let fast_provider = SleepProvider {
+                delay: Duration::from_millis(14),
+            };
+            let normal_provider = SleepProvider {
+                delay: Duration::from_millis(32),
+            };
+            provider_fast = bench_provider(&fast_provider, iterations).await?;
+            provider_normal = bench_provider(&normal_provider, iterations).await?;
 
-    let tool = SleepTool {
-        delay: Duration::from_millis(11),
-    };
-    let tool_lat = bench_tool(&tool, iterations).await?;
+            let channel = SleepChannel {
+                delay: Duration::from_millis(18),
+            };
+            channel_lat = bench_channel(&channel, iterations).await?;
+
+            let tool = SleepTool {
+                delay: Duration::from_millis(11),
+            };
+            tool_lat = bench_tool(&tool, iterations).await?;
+
+            note_parts.push("synthetic mode".to_string());
+        }
+        BenchMode::Real => {
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()?;
+
+            let provider_url = std::env::var("CRABCLAW_BENCH_REAL_PROVIDER_URL").ok();
+            let provider_key = std::env::var("CRABCLAW_BENCH_REAL_PROVIDER_API_KEY").ok();
+            let provider_model = std::env::var("CRABCLAW_BENCH_REAL_PROVIDER_MODEL")
+                .unwrap_or_else(|_| "gpt-4o-mini".to_string());
+
+            if let (Some(url), Some(key)) = (provider_url, provider_key) {
+                let real_provider = RealProvider {
+                    client: client.clone(),
+                    base_url: url,
+                    api_key: key,
+                    model: provider_model,
+                };
+                provider_fast = bench_provider(&real_provider, iterations).await?;
+                provider_normal = provider_fast.clone();
+                note_parts.push("real provider".to_string());
+            } else {
+                let fallback = SleepProvider {
+                    delay: Duration::from_millis(14),
+                };
+                provider_fast = bench_provider(&fallback, iterations).await?;
+                provider_normal = provider_fast.clone();
+                note_parts.push("real provider unavailable -> synthetic fallback".to_string());
+            }
+
+            if let Ok(webhook) = std::env::var("CRABCLAW_BENCH_REAL_CHANNEL_WEBHOOK_URL") {
+                let real_channel = RealWebhookChannel {
+                    client: client.clone(),
+                    webhook_url: webhook,
+                };
+                channel_lat = bench_channel(&real_channel, iterations).await?;
+                note_parts.push("real channel".to_string());
+            } else {
+                let fallback = SleepChannel {
+                    delay: Duration::from_millis(18),
+                };
+                channel_lat = bench_channel(&fallback, iterations).await?;
+                note_parts.push("real channel unavailable -> synthetic fallback".to_string());
+            }
+
+            if let Ok(cmd) = std::env::var("CRABCLAW_BENCH_REAL_TOOL_COMMAND") {
+                let real_tool = RealCommandTool { command: cmd };
+                tool_lat = bench_tool(&real_tool, iterations).await?;
+                note_parts.push("real tool".to_string());
+            } else {
+                let fallback = SleepTool {
+                    delay: Duration::from_millis(11),
+                };
+                tool_lat = bench_tool(&fallback, iterations).await?;
+                note_parts.push("real tool unavailable -> synthetic fallback".to_string());
+            }
+        }
+    }
 
     let memory_recall = bench_memory_recall(iterations).await?;
 
-    // Synthetic TTFT benchmark (approximated by fast provider latency p95)
+    // TTFT proxy
     let ttft_p95 = percentile_ms(&provider_fast, 0.95);
 
     let mut metrics = BTreeMap::new();
@@ -236,23 +460,34 @@ async fn main() -> anyhow::Result<()> {
         "channel.send.p95_ms".to_string(),
         percentile_ms(&channel_lat, 0.95),
     );
-    metrics.insert("tool.exec.p95_ms".to_string(), percentile_ms(&tool_lat, 0.95));
+    metrics.insert(
+        "tool.exec.p95_ms".to_string(),
+        percentile_ms(&tool_lat, 0.95),
+    );
     metrics.insert(
         "memory.recall.p95_ms".to_string(),
         percentile_ms(&memory_recall, 0.95),
     );
-    metrics.insert(
-        "memory.recall.avg_ms".to_string(),
-        average(&memory_recall),
-    );
+    metrics.insert("memory.recall.avg_ms".to_string(), average(&memory_recall));
     metrics.insert("ttft.p95_ms".to_string(), ttft_p95);
-    metrics.insert("cost.per_task_usd".to_string(), benchmark_cost_per_task_usd());
+    metrics.insert(
+        "cost.per_task_usd".to_string(),
+        benchmark_cost_per_task_usd(),
+    );
+    metrics.insert(
+        "bench.mode.real".to_string(),
+        if matches!(mode, BenchMode::Real) {
+            1.0
+        } else {
+            0.0
+        },
+    );
 
     let report = BenchmarkReport {
         metadata: BenchmarkMetadata {
             timestamp_utc: chrono::Utc::now().to_rfc3339(),
             iterations,
-            note: "Synthetic benchmark suite for regression detection in CI".to_string(),
+            note: note_parts.join("; "),
         },
         metrics,
     };

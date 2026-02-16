@@ -191,6 +191,43 @@ jobs:
                   name: benchmark-results
                   path: benchmark/results/
 
+    benchmark-real:
+        name: Real Provider/Channel/Tool Benchmarks (optional)
+        needs: [changes, build]
+        if: needs.changes.outputs.docs_only != 'true' && secrets.CRABCLAW_BENCH_REAL_PROVIDER_URL != ''
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        env:
+            CRABCLAW_BENCH_MODE: real
+            CRABCLAW_BENCH_BASELINE: benchmark/baseline.real.json
+            CRABCLAW_BENCH_REAL_PROVIDER_URL: ${{ secrets.CRABCLAW_BENCH_REAL_PROVIDER_URL }}
+            CRABCLAW_BENCH_REAL_PROVIDER_API_KEY: ${{ secrets.CRABCLAW_BENCH_REAL_PROVIDER_API_KEY }}
+            CRABCLAW_BENCH_REAL_PROVIDER_MODEL: ${{ secrets.CRABCLAW_BENCH_REAL_PROVIDER_MODEL }}
+            CRABCLAW_BENCH_REAL_CHANNEL_WEBHOOK_URL: ${{ secrets.CRABCLAW_BENCH_REAL_CHANNEL_WEBHOOK_URL }}
+            CRABCLAW_BENCH_REAL_TOOL_COMMAND: ${{ secrets.CRABCLAW_BENCH_REAL_TOOL_COMMAND }}
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+              with:
+                  toolchain: 1.92
+            - uses: Swatinem/rust-cache@v2
+            - name: Run optional real benchmark suite
+              run: bash scripts/benchmark_ci.sh
+            - name: Append real benchmark summary to job summary
+              if: always()
+              run: |
+                  if [ -f benchmark/results/summary.md ]; then
+                    cat benchmark/results/summary.md >> "$GITHUB_STEP_SUMMARY"
+                  else
+                    echo "## ⚠️ Real benchmark summary unavailable" >> "$GITHUB_STEP_SUMMARY"
+                  fi
+            - name: Upload real benchmark artifacts
+              if: always()
+              uses: actions/upload-artifact@v4
+              with:
+                  name: benchmark-results-real
+                  path: benchmark/results/
+
     docs-only:
         name: Docs-Only Fast Path
         needs: [changes]

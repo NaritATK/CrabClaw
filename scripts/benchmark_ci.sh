@@ -48,9 +48,23 @@ python3 scripts/merge_benchmark_results.py \
   --cold benchmark/results/cold_start.json \
   --out benchmark/results/latest.full.json
 
-python3 scripts/compare_benchmarks.py \
-  --baseline benchmark/baseline.json \
-  --current benchmark/results/latest.full.json \
-  --summary-out benchmark/results/summary.md
+BASELINE_PATH="${CRABCLAW_BENCH_BASELINE:-benchmark/baseline.json}"
+
+if [ -f "$BASELINE_PATH" ]; then
+  python3 scripts/compare_benchmarks.py \
+    --baseline "$BASELINE_PATH" \
+    --current benchmark/results/latest.full.json \
+    --summary-out benchmark/results/summary.md
+else
+  echo "[bench] baseline not found at $BASELINE_PATH; skipping regression gate"
+  cat > benchmark/results/summary.md <<EOF
+## ⚠️ Benchmark baseline not found
+
+Baseline path: `$BASELINE_PATH`
+
+Set baseline via env var `CRABCLAW_BENCH_BASELINE`.
+Regression comparison was skipped for this run.
+EOF
+fi
 
 echo "[bench] done"
