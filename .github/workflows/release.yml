@@ -19,27 +19,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Release bootstrap profile: publish a guaranteed latest release first.
+          # Additional targets can be re-enabled after latest pipeline is green.
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: crabclaw
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-            artifact: crabclaw
-          - os: macos-15-intel
-            target: x86_64-apple-darwin
-            artifact: crabclaw
-          - os: macos-14
-            target: aarch64-apple-darwin
-            artifact: crabclaw
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact: crabclaw.exe
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.92
           targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
