@@ -11,7 +11,7 @@ For each latency family, CrabClaw records **median, p90, p95** and keeps raw sam
 - provider latency: `provider.fast.*`, `provider.normal.*`
 - channel latency: `channel.send.*`
 - tool latency: `tool.exec.*`
-- memory recall latency: `memory.recall.*`
+- memory recall latency/quality: `memory.recall.*`, `memory.recall.hit_at_k`, `memory.recall.precision_proxy`
 - `cost.per_task_usd` (synthetic reference task)
 - observability diagnostics:
   - `http.dns_ms`, `http.connect_ms`, `http.ttfb_ms` (real mode when provider URL is configured)

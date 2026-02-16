@@ -6,6 +6,7 @@ use chrono::Local;
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 /// SQLite-backed persistent memory — the brain
@@ -17,12 +18,15 @@ use uuid::Uuid;
 /// - **Embedding Cache**: LRU-evicted cache to avoid redundant API calls
 /// - **Safe Reindex**: temp DB → seed → sync → atomic swap → rollback
 pub struct SqliteMemory {
-    conn: Mutex<Connection>,
+    conn: Arc<Mutex<Connection>>,
     db_path: PathBuf,
     embedder: Arc<dyn EmbeddingProvider>,
     vector_weight: f32,
     keyword_weight: f32,
     cache_max: usize,
+    max_embed_chunks_per_ingest: usize,
+    embed_chunk_tokens: usize,
+    embedding_workers: Arc<Semaphore>,
 }
 
 impl SqliteMemory {
@@ -49,16 +53,40 @@ impl SqliteMemory {
             std::fs::create_dir_all(parent)?;
         }
 
-        let conn = Connection::open(&db_path)?;
-        Self::init_schema(&conn)?;
+        let conn = Arc::new(Mutex::new(Connection::open(&db_path)?));
+        {
+            let conn_guard = conn
+                .lock()
+                .map_err(|e| anyhow::anyhow!("Lock error: {e}"))?;
+            Self::init_schema(&conn_guard)?;
+        }
+
+        let max_embed_chunks_per_ingest = std::env::var("CRABCLAW_MEMORY_MAX_EMBED_CHUNKS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(3);
+        let embed_chunk_tokens = std::env::var("CRABCLAW_MEMORY_EMBED_CHUNK_TOKENS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(256);
+        let worker_limit = std::env::var("CRABCLAW_MEMORY_EMBED_WORKERS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(2);
 
         Ok(Self {
-            conn: Mutex::new(conn),
+            conn,
             db_path,
             embedder,
             vector_weight,
             keyword_weight,
             cache_max,
+            max_embed_chunks_per_ingest,
+            embed_chunk_tokens,
+            embedding_workers: Arc::new(Semaphore::new(worker_limit)),
         })
     }
 
@@ -146,6 +174,42 @@ impl SqliteMemory {
         )
     }
 
+    fn chunk_for_embedding(&self, text: &str) -> Vec<String> {
+        let chunks = super::chunker::chunk_markdown(text, self.embed_chunk_tokens);
+        if chunks.is_empty() {
+            return vec![text.to_string()];
+        }
+        chunks
+            .into_iter()
+            .take(self.max_embed_chunks_per_ingest)
+            .map(|c| c.content)
+            .collect()
+    }
+
+    fn average_embeddings(vectors: &[Vec<f32>]) -> Option<Vec<f32>> {
+        if vectors.is_empty() {
+            return None;
+        }
+        let dims = vectors[0].len();
+        if dims == 0 {
+            return None;
+        }
+        let mut out = vec![0.0f32; dims];
+        for v in vectors {
+            if v.len() != dims {
+                continue;
+            }
+            for (i, val) in v.iter().enumerate() {
+                out[i] += *val;
+            }
+        }
+        let denom = vectors.len() as f32;
+        for item in &mut out {
+            *item /= denom;
+        }
+        Some(out)
+    }
+
     /// Get embedding from cache, or compute + cache it
     async fn get_or_compute_embedding(&self, text: &str) -> anyhow::Result<Option<Vec<f32>>> {
         if self.embedder.dimensions() == 0 {
@@ -155,7 +219,6 @@ impl SqliteMemory {
         let hash = Self::content_hash(text);
         let now = Local::now().to_rfc3339();
 
-        // Check cache
         {
             let conn = self
                 .conn
@@ -167,7 +230,6 @@ impl SqliteMemory {
             let cached: Option<Vec<u8>> = stmt.query_row(params![hash], |row| row.get(0)).ok();
 
             if let Some(bytes) = cached {
-                // Update accessed_at for LRU
                 conn.execute(
                     "UPDATE embedding_cache SET accessed_at = ?1 WHERE content_hash = ?2",
                     params![now, hash],
@@ -176,11 +238,13 @@ impl SqliteMemory {
             }
         }
 
-        // Compute embedding
-        let embedding = self.embedder.embed_one(text).await?;
+        let chunks = self.chunk_for_embedding(text);
+        let chunk_refs: Vec<&str> = chunks.iter().map(String::as_str).collect();
+        let chunk_embeddings = self.embedder.embed(&chunk_refs).await?;
+        let embedding = Self::average_embeddings(&chunk_embeddings)
+            .ok_or_else(|| anyhow::anyhow!("empty embedding result"))?;
         let bytes = vector::vec_to_bytes(&embedding);
 
-        // Store in cache + LRU eviction
         {
             let conn = self
                 .conn
@@ -193,7 +257,6 @@ impl SqliteMemory {
                 params![hash, bytes, now, now],
             )?;
 
-            // LRU eviction: keep only cache_max entries
             #[allow(clippy::cast_possible_wrap)]
             let max = self.cache_max as i64;
             conn.execute(
@@ -346,12 +409,6 @@ impl Memory for SqliteMemory {
         content: &str,
         category: MemoryCategory,
     ) -> anyhow::Result<()> {
-        // Compute embedding (async, before lock)
-        let embedding_bytes = self
-            .get_or_compute_embedding(content)
-            .await?
-            .map(|emb| vector::vec_to_bytes(&emb));
-
         let conn = self
             .conn
             .lock()
@@ -360,16 +417,110 @@ impl Memory for SqliteMemory {
         let cat = Self::category_to_str(&category);
         let id = Uuid::new_v4().to_string();
 
+        // Fast path: write immediately, embedding computed asynchronously.
         conn.execute(
             "INSERT INTO memories (id, key, content, category, embedding, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6)
              ON CONFLICT(key) DO UPDATE SET
                 content = excluded.content,
                 category = excluded.category,
-                embedding = excluded.embedding,
+                embedding = NULL,
                 updated_at = excluded.updated_at",
-            params![id, key, content, cat, embedding_bytes, now, now],
+            params![id, key, content, cat, now, now],
         )?;
+        drop(conn);
+
+        if self.embedder.dimensions() > 0 {
+            let key_owned = key.to_string();
+            let content_owned = content.to_string();
+            let conn = Arc::clone(&self.conn);
+            let embedder = Arc::clone(&self.embedder);
+            let permit_pool = Arc::clone(&self.embedding_workers);
+            let cache_max = self.cache_max;
+            let max_chunks = self.max_embed_chunks_per_ingest;
+            let chunk_tokens = self.embed_chunk_tokens;
+
+            tokio::spawn(async move {
+                let _permit = permit_pool.acquire_owned().await.ok();
+
+                let chunks = super::chunker::chunk_markdown(&content_owned, chunk_tokens);
+                let chunked: Vec<String> = if chunks.is_empty() {
+                    vec![content_owned.clone()]
+                } else {
+                    chunks
+                        .into_iter()
+                        .take(max_chunks)
+                        .map(|c| c.content)
+                        .collect()
+                };
+                let text_for_hash = chunked.join("\n\n---\n\n");
+                let hash = SqliteMemory::content_hash(&text_for_hash);
+                let now = Local::now().to_rfc3339();
+
+                let cached: Option<Vec<u8>> = {
+                    let guard = match conn.lock() {
+                        Ok(g) => g,
+                        Err(_) => return,
+                    };
+                    let mut stmt = match guard
+                        .prepare("SELECT embedding FROM embedding_cache WHERE content_hash = ?1")
+                    {
+                        Ok(s) => s,
+                        Err(_) => return,
+                    };
+                    stmt.query_row(params![hash.clone()], |row| row.get(0)).ok()
+                };
+
+                let emb_bytes = if let Some(bytes) = cached {
+                    let guard = match conn.lock() {
+                        Ok(g) => g,
+                        Err(_) => return,
+                    };
+                    let _ = guard.execute(
+                        "UPDATE embedding_cache SET accessed_at = ?1 WHERE content_hash = ?2",
+                        params![now.clone(), hash.clone()],
+                    );
+                    bytes
+                } else {
+                    let refs: Vec<&str> = chunked.iter().map(String::as_str).collect();
+                    let embs = match embedder.embed(&refs).await {
+                        Ok(v) => v,
+                        Err(_) => return,
+                    };
+                    let emb = match SqliteMemory::average_embeddings(&embs) {
+                        Some(v) => v,
+                        None => return,
+                    };
+                    let bytes = vector::vec_to_bytes(&emb);
+                    let guard = match conn.lock() {
+                        Ok(g) => g,
+                        Err(_) => return,
+                    };
+                    let _ = guard.execute(
+                        "INSERT OR REPLACE INTO embedding_cache (content_hash, embedding, created_at, accessed_at)
+                         VALUES (?1, ?2, ?3, ?4)",
+                        params![hash.clone(), bytes.clone(), now.clone(), now.clone()],
+                    );
+                    let max = cache_max as i64;
+                    let _ = guard.execute(
+                        "DELETE FROM embedding_cache WHERE content_hash IN (
+                            SELECT content_hash FROM embedding_cache
+                            ORDER BY accessed_at ASC
+                            LIMIT MAX(0, (SELECT COUNT(*) FROM embedding_cache) - ?1)
+                        )",
+                        params![max],
+                    );
+                    bytes
+                };
+
+                if let Ok(guard) = conn.lock() {
+                    let _ = guard.execute(
+                        "UPDATE memories SET embedding = ?1, updated_at = ?2 WHERE key = ?3",
+                        params![emb_bytes, now, key_owned],
+                    );
+                }
+            });
+        }
 
         Ok(())
     }

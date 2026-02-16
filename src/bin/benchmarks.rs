@@ -335,7 +335,7 @@ async fn bench_tool(tool: &dyn Tool, iterations: usize) -> anyhow::Result<Vec<f6
     Ok(out)
 }
 
-async fn bench_memory_recall(iterations: usize) -> anyhow::Result<Vec<f64>> {
+async fn bench_memory_recall(iterations: usize) -> anyhow::Result<(Vec<f64>, f64, f64)> {
     let mut dir = std::env::temp_dir();
     dir.push(format!("crabclaw-bench-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir)?;
@@ -343,23 +343,45 @@ async fn bench_memory_recall(iterations: usize) -> anyhow::Result<Vec<f64>> {
     let mem = SqliteMemory::new(&dir)?;
 
     for i in 0..200 {
+        let topic = if i % 2 == 0 { "rust" } else { "python" };
         mem.store(
             &format!("bench-key-{i}"),
-            &format!("This is benchmark content number {i} for memory recall latency testing."),
+            &format!(
+                "This is benchmark content number {i} about {topic} memory recall latency testing."
+            ),
             MemoryCategory::Conversation,
         )
         .await?;
     }
 
     let mut out = Vec::with_capacity(iterations);
+    let mut hit = 0usize;
+    let mut precision_sum = 0.0f64;
     for i in 0..iterations {
+        let topic = if i % 2 == 0 { "rust" } else { "python" };
         let t0 = Instant::now();
-        let _ = mem.recall(&format!("benchmark {}", i % 20), 10).await?;
+        let rows = mem.recall(topic, 10).await?;
         out.push(t0.elapsed().as_secs_f64() * 1000.0);
+
+        if rows
+            .iter()
+            .any(|r| r.content.to_lowercase().contains(topic))
+        {
+            hit += 1;
+        }
+        if !rows.is_empty() {
+            let relevant = rows
+                .iter()
+                .filter(|r| r.content.to_lowercase().contains(topic))
+                .count();
+            precision_sum += relevant as f64 / rows.len() as f64;
+        }
     }
 
     let _ = std::fs::remove_dir_all(&dir);
-    Ok(out)
+    let hit_at_k = hit as f64 / iterations as f64;
+    let precision_proxy = precision_sum / iterations as f64;
+    Ok((out, hit_at_k, precision_proxy))
 }
 
 async fn probe_http_breakdown(base_url: &str) -> anyhow::Result<(f64, f64, f64)> {
@@ -538,7 +560,8 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let memory_recall = bench_memory_recall(iterations).await?;
+    let (memory_recall, memory_hit_at_k, memory_precision_proxy) =
+        bench_memory_recall(iterations).await?;
 
     // TTFT proxy
     let ttft_p95 = percentile_ms(&provider_fast, 0.95);
@@ -551,6 +574,11 @@ async fn main() -> anyhow::Result<()> {
     insert_latency_metrics(&mut metrics, "memory.recall", &memory_recall);
 
     metrics.insert("memory.recall.avg_ms".to_string(), average(&memory_recall));
+    metrics.insert("memory.recall.hit_at_k".to_string(), memory_hit_at_k);
+    metrics.insert(
+        "memory.recall.precision_proxy".to_string(),
+        memory_precision_proxy,
+    );
     metrics.insert(
         "ttft.p90_ms".to_string(),
         percentile_ms(&provider_fast, 0.90),
