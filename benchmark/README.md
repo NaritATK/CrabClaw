@@ -15,6 +15,7 @@ For each latency family, CrabClaw records **median, p90, p95** and keeps raw sam
 - `cost.per_task_usd` (synthetic reference task)
 - observability diagnostics:
   - `http.dns_ms`, `http.connect_ms`, `http.ttfb_ms` (real mode when provider URL is configured)
+  - real/synthetic execution flags: `bench.real_provider_used`, `bench.real_channel_used`, `bench.real_tool_used`
   - `provider.retry_count`, `provider.timeout_rate`
   - `provider.coalesced_wait_count`, `provider.hedge_launch_count`, `provider.hedge_win_count`
   - `circuitbreaker.open_count`, `circuitbreaker.half_open_count`, `circuitbreaker.close_count`
@@ -71,6 +72,7 @@ If selected baseline file does not exist, the script still produces results + su
 - `CRABCLAW_BENCH_REAL_PROVIDER_MODEL` (optional, default `gpt-4o-mini`)
 - `CRABCLAW_BENCH_REAL_CHANNEL_WEBHOOK_URL` (optional)
 - `CRABCLAW_BENCH_REAL_TOOL_COMMAND` (optional)
+- `CRABCLAW_BENCH_REAL_REQUIRED=true` (optional; fail fast if real deps missing)
 
 ### Refresh baseline automation
 

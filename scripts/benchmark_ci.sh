@@ -59,7 +59,7 @@ print(f"[bench] cold_start p90={p90:.2f}ms p95={p95:.2f}ms avg={avg:.2f}ms")
 PY
 
 echo "[bench] running synthetic benchmark suite"
-target/release/benchmarks --output benchmark/results/latest.json
+CRABCLAW_BENCH_MODE=synthetic target/release/benchmarks --output benchmark/results/latest.json
 
 "$PYTHON_BIN" scripts/merge_benchmark_results.py \
   --main benchmark/results/latest.json \

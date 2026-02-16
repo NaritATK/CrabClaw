@@ -479,6 +479,10 @@ async fn main() -> anyhow::Result<()> {
     let channel_lat: Vec<f64>;
     let tool_lat: Vec<f64>;
 
+    let mut real_provider_used = 0.0;
+    let mut real_channel_used = 0.0;
+    let mut real_tool_used = 0.0;
+
     match mode {
         BenchMode::Synthetic => {
             let fast_provider = SleepProvider {
@@ -507,6 +511,11 @@ async fn main() -> anyhow::Result<()> {
                 .timeout(Duration::from_secs(30))
                 .build()?;
 
+            let require_real = std::env::var("CRABCLAW_BENCH_REAL_REQUIRED")
+                .ok()
+                .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+                .unwrap_or(false);
+
             let provider_url = std::env::var("CRABCLAW_BENCH_REAL_PROVIDER_URL").ok();
             let provider_key = std::env::var("CRABCLAW_BENCH_REAL_PROVIDER_API_KEY").ok();
             let provider_model = std::env::var("CRABCLAW_BENCH_REAL_PROVIDER_MODEL")
@@ -521,7 +530,12 @@ async fn main() -> anyhow::Result<()> {
                 };
                 provider_fast = bench_provider(&real_provider, iterations).await?;
                 provider_normal = provider_fast.clone();
+                real_provider_used = 1.0;
                 note_parts.push("real provider".to_string());
+            } else if require_real {
+                anyhow::bail!(
+                    "CRABCLAW_BENCH_MODE=real with CRABCLAW_BENCH_REAL_REQUIRED=true requires provider envs"
+                );
             } else {
                 let fallback = SleepProvider {
                     delay: Duration::from_millis(14),
@@ -537,7 +551,12 @@ async fn main() -> anyhow::Result<()> {
                     webhook_url: webhook,
                 };
                 channel_lat = bench_channel(&real_channel, iterations).await?;
+                real_channel_used = 1.0;
                 note_parts.push("real channel".to_string());
+            } else if require_real {
+                anyhow::bail!(
+                    "CRABCLAW_BENCH_MODE=real with CRABCLAW_BENCH_REAL_REQUIRED=true requires CRABCLAW_BENCH_REAL_CHANNEL_WEBHOOK_URL"
+                );
             } else {
                 let fallback = SleepChannel {
                     delay: Duration::from_millis(18),
@@ -549,7 +568,12 @@ async fn main() -> anyhow::Result<()> {
             if let Ok(cmd) = std::env::var("CRABCLAW_BENCH_REAL_TOOL_COMMAND") {
                 let real_tool = RealCommandTool { command: cmd };
                 tool_lat = bench_tool(&real_tool, iterations).await?;
+                real_tool_used = 1.0;
                 note_parts.push("real tool".to_string());
+            } else if require_real {
+                anyhow::bail!(
+                    "CRABCLAW_BENCH_MODE=real with CRABCLAW_BENCH_REAL_REQUIRED=true requires CRABCLAW_BENCH_REAL_TOOL_COMMAND"
+                );
             } else {
                 let fallback = SleepTool {
                     delay: Duration::from_millis(11),
@@ -600,6 +624,9 @@ async fn main() -> anyhow::Result<()> {
             0.0
         },
     );
+    metrics.insert("bench.real_provider_used".to_string(), real_provider_used);
+    metrics.insert("bench.real_channel_used".to_string(), real_channel_used);
+    metrics.insert("bench.real_tool_used".to_string(), real_tool_used);
 
     let reliability_stats = collect_reliability_observability_metrics().await?;
     metrics.insert(
